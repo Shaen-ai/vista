@@ -1,0 +1,27 @@
+{
+  "seed": 2072232839,
+  "stagingPrompt": "Warm beige walls with beige-sage feature wallpaper, light oak wide-plank floor, flat ivory ceiling with flush light. One oak bunk bed on long north wall, oak wardrobe on south wall, oak desk by east window, soft sand bo…",
+  "masterRenderPrompt": "Keep all walls, doors, windows, ceiling from input photo unchanged. One light oak twin-over-twin bunk bed centered along the long north wall, one freestanding light oak wardrobe against the south wall opposite the bunk, one compact oak desk with chair by the east window, one soft sand boucle rug centered on the floor.. Visible: camera ~0.2 m from the east wall, near the north-east corner, facing…",
+  "finishLock": {
+    "floorMaterial": "light oak wide-plank flooring",
+    "ceilingDesign": "flat matte ivory ceiling with central flush fixture and recessed downlights",
+    "wallColor": "warm beige walls with subtle beige-and-sage organic feature wallpaper on the long north wall",
+    "lightingConcept": "symmetric ambient flush ceiling light, paired recessed downlights, matched brass reading sconces, concealed LED under-loft glow",
+    "paletteSummary": "light oak, warm beige, muted sage accents"
+  },
+  "photoPrompts": [
+    {
+      "photoId": "photo-1782899041931-7g5r",
+      "label": "IMG 4163",
+      "stagingPrompt": "Warm beige walls with beige-sage feature wallpaper, light oak wide-plank floor, flat ivory ceiling with flush light. One oak bunk bed on long north wall, oak wardrobe on south wall, oak desk by east window, soft sand bo…",
+      "cameraNote": "facing west; door opening visible on west wall ahead"
+    },
+    {
+      "photoId": "photo-1782899042105-qq2l",
+      "label": "IMG 4162",
+      "stagingPrompt": "Warm beige walls with beige-sage feature wallpaper, light oak wide-plank floor, flat ivory ceiling with flush light. One oak bunk bed on long north wall, oak wardrobe on south wall, oak desk by east window, soft sand bo…",
+      "cameraNote": "facing east; window on east wall ahead"
+    }
+  ],
+  "updatedAt": "2026-07-03T10:07:05.828Z"
+}

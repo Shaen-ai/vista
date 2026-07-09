@@ -1,0 +1,10 @@
+{
+  "status": "staging_failed",
+  "updatedAt": "2026-07-05T13:36:01.642Z",
+  "step": "staging",
+  "renderModel": "edit-pipeline",
+  "prepComplete": true,
+  "prepSkipped": true,
+  "stagingComplete": true,
+  "error": "Invalid state: Controller is already closed"
+}

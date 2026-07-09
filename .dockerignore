@@ -1,0 +1,9 @@
+.git
+.cursor
+node_modules
+.next
+.env
+.env.*
+!.env.example
+npm-debug.log
+.DS_Store

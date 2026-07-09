@@ -1,0 +1,27 @@
+{
+  "seed": 1008269044,
+  "stagingPrompt": "Warm beige walls, light oak floor, flat matte white ceiling. Light oak bunk bed on north wall head west, oak wardrobe on south wall near door, desk under east window, oatmeal rug centered. Ahead: door on west wall, ward…",
+  "masterRenderPrompt": "Warm beige walls, light oak floor, flat matte white ceiling. Light oak bunk bed on north wall head west, oak wardrobe on south wall near door, desk under east window, oatmeal rug centered. Ahead: door on west wall, ward…",
+  "finishLock": {
+    "floorMaterial": "Light oak engineered wood flooring",
+    "ceilingDesign": "Flat matte white ceiling with centered flush-mount fixture",
+    "wallColor": "Warm beige matte paint",
+    "lightingConcept": "Symmetric flush-mount ambient ceiling light with integrated LED bunk strip and brushed brass bedside sconce",
+    "paletteSummary": "warm beige, light oak, soft sage accents"
+  },
+  "photoPrompts": [
+    {
+      "photoId": "photo-1782588804322-8ydp",
+      "label": "IMG 4163",
+      "stagingPrompt": "Warm beige walls, light oak floor, flat matte white ceiling. Light oak bunk bed on north wall head west, oak wardrobe on south wall near door, desk under east window, oatmeal rug centered. Ahead: door on west wall, ward…",
+      "cameraNote": "Facing west toward door wall; wardrobe along south (left) wall, bunk along north (right) wall."
+    },
+    {
+      "photoId": "photo-1782588804614-tfsw",
+      "label": "IMG 4162",
+      "stagingPrompt": "Warm beige walls, light oak floor, flat matte white ceiling. Light oak bunk bed on north wall head west, oak wardrobe on south wall near door, desk under east window, oatmeal rug centered. Ahead: compact oak desk under…",
+      "cameraNote": "Facing east toward window; bunk along north (left) long wall, desk beneath window ahead."
+    }
+  ],
+  "updatedAt": "2026-06-28T15:21:20.807Z"
+}

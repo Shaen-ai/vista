@@ -1,0 +1,9 @@
+{
+  "status": "complete",
+  "updatedAt": "2026-06-28T15:21:39.984Z",
+  "step": "staging",
+  "renderModel": "apartment-staging",
+  "prepComplete": true,
+  "prepSkipped": true,
+  "stagingComplete": true
+}

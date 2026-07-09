@@ -1,0 +1,10 @@
+{
+  "status": "complete",
+  "updatedAt": "2026-07-05T11:13:14.702Z",
+  "step": "staging",
+  "renderModel": "edit-pipeline",
+  "prepComplete": true,
+  "prepSkipped": true,
+  "error": "Forbidden",
+  "stagingComplete": true
+}
