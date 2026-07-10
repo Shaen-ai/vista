@@ -10,6 +10,13 @@ const POSTHOG_KEY = process.env.NEXT_PUBLIC_POSTHOG_KEY;
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!POSTHOG_KEY || posthog.__loaded) return;
+    // Keep local dev traffic out of production analytics.
+    if (
+      process.env.NODE_ENV === "development" ||
+      ["localhost", "127.0.0.1"].includes(window.location.hostname)
+    ) {
+      return;
+    }
     const deviceId = getOrCreateDeviceId();
     posthog.init(POSTHOG_KEY, {
       api_host: "/ingest",

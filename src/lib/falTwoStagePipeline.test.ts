@@ -101,13 +101,11 @@ test("buildFalRedesignPrompt includes style room type and materials", () => {
   const prompt = buildFalRedesignPrompt({
     styleId: "scandinavian",
     roomAnalysis: analysis,
-    surfaceMaterials: { floor: "light oak wood", walls: "matte white paint" },
     hasStructuralLines: true,
   });
 
   assert.match(prompt, /Scandinavian/i);
   assert.match(prompt, /living room/i);
-  assert.match(prompt, /light oak wood/i);
   assert.match(prompt, /line map/i);
   assert.match(prompt, /Preserve exactly 2 window/i);
 });

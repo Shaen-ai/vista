@@ -1,5 +1,4 @@
 import type { DesignBrief } from "@/lib/interiorDesignPrompts";
-import type { SurfaceMaterialOverrides } from "@/lib/falPipelinePrompt";
 import { buildPreserveScaffold } from "@/lib/project/editPromptAssembly";
 
 /**
@@ -60,17 +59,6 @@ export interface QuickRoomEditInstructionInput {
   productCloseText?: string;
   merchantAppendix?: string;
   editContext?: string;
-  surfaceMaterials?: SurfaceMaterialOverrides;
-}
-
-function surfaceMaterialsSentence(overrides?: SurfaceMaterialOverrides): string {
-  if (!overrides) return "";
-  const bits: string[] = [];
-  if (overrides.floor?.trim()) bits.push(`floor: ${overrides.floor.trim()}`);
-  if (overrides.walls?.trim()) bits.push(`walls: ${overrides.walls.trim()}`);
-  if (overrides.ceiling?.trim()) bits.push(`ceiling: ${overrides.ceiling.trim()}`);
-  if (bits.length === 0) return "";
-  return `Surface finishes (user-selected, mandatory): ${bits.join("; ")}.`;
 }
 
 export function buildQuickRoomEditInstruction(input: QuickRoomEditInstructionInput): string {
@@ -81,7 +69,6 @@ export function buildQuickRoomEditInstruction(input: QuickRoomEditInstructionInp
     `CHANGE: Redesign this room as a photorealistic ${input.designStyleLabel} interior.`,
     input.brief.subject?.trim() ? `Design: ${input.brief.subject.trim()}` : "",
     input.brief.arrangement?.trim() ? `Furniture arrangement: ${input.brief.arrangement.trim()}` : "",
-    surfaceMaterialsSentence(input.surfaceMaterials),
     doorDesign ? `Door styling: ${doorDesign}` : "",
     input.editContext?.trim() ? `User adjustments: ${input.editContext.trim()}` : "",
   ].filter(Boolean);

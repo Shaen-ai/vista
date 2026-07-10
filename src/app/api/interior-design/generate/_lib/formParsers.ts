@@ -1,5 +1,4 @@
 import { optimizeImageBufferForAiWithBuffer } from "@/lib/optimizeImageForAi";
-import type { SurfaceMaterialOverrides } from "@/lib/falPipelinePrompt";
 
 const MAX_INSPIRATION_IMAGES = 10;
 const MAX_STYLE_INSPIRATION_IMAGES = 4;
@@ -109,16 +108,4 @@ export function parseObjectRemovalMaskFromForm(formData: FormData): {
   if (!base64) return null;
   const mimeType = String(formData.get("objectRemovalMaskMime") ?? "image/png").trim() || "image/png";
   return { base64, mimeType };
-}
-
-export function parseSurfaceMaterialsFromForm(formData: FormData): SurfaceMaterialOverrides | undefined {
-  const raw = String(formData.get("surfaceMaterials") ?? "").trim();
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as SurfaceMaterialOverrides;
-    if (!parsed || typeof parsed !== "object") return undefined;
-    return parsed;
-  } catch {
-    return undefined;
-  }
 }

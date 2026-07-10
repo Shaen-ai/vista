@@ -7,12 +7,6 @@ import {
 import { buildFalOpeningLockCompact } from "@/lib/falOpeningLockCompact";
 import type { RoomGeometry } from "@/lib/roomGeometryTypes";
 
-export interface SurfaceMaterialOverrides {
-  floor?: string;
-  walls?: string;
-  ceiling?: string;
-}
-
 export interface FalRedesignPromptInput {
   /** Pre-built design prompt (brief.fullPrompt, project prompt, etc.) */
   designPrompt?: string;
@@ -22,7 +16,6 @@ export interface FalRedesignPromptInput {
   roomGeometry?: RoomGeometry | null;
   /** Claude door styling concept — finished door leaves, not bare openings. */
   doorDesign?: string | null;
-  surfaceMaterials?: SurfaceMaterialOverrides;
   /** User drew structural boundary lines — add ControlNet guidance tail. */
   hasStructuralLines?: boolean;
   /** User marked objects to remove before redesign. */
@@ -74,7 +67,7 @@ function appendFalStructuralBlocks(
 
 /** Auto-build FAL redesign prompt from style + room analysis + optional materials. */
 export function buildFalRedesignPrompt(input: FalRedesignPromptInput): string {
-  if (input.designPrompt?.trim() && !input.styleId && !input.roomAnalysis && !input.surfaceMaterials) {
+  if (input.designPrompt?.trim() && !input.styleId && !input.roomAnalysis) {
     const base = sanitizeDesignPromptForViewpoint(input.designPrompt.trim(), input.roomAnalysis);
     const withStructure = appendFalStructuralBlocks(base, input);
     return `${appendFalPromptTails(withStructure, input)}\n\n${GEOMETRY_LOCK}`;
@@ -93,11 +86,6 @@ export function buildFalRedesignPrompt(input: FalRedesignPromptInput): string {
   ];
   if (styleKeywords) parts.push(styleKeywords);
   if (currentStyle) parts.push(`Current room style: ${currentStyle}.`);
-
-  const mats = input.surfaceMaterials;
-  if (mats?.floor?.trim()) parts.push(`Floor: ${mats.floor.trim()}.`);
-  if (mats?.walls?.trim()) parts.push(`Walls: ${mats.walls.trim()}.`);
-  if (mats?.ceiling?.trim()) parts.push(`Ceiling: ${mats.ceiling.trim()}.`);
 
   if (input.roomAnalysis?.structural_elements.length) {
     parts.push(

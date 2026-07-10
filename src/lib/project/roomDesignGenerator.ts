@@ -980,7 +980,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 async function firstSearchHitInAllowlist(query: string, allowed: Set<number>): Promise<Record<string, unknown> | undefined> {
   try {
     const res = await fetch(
-      `${getServerMarketplaceApiBaseUrl()}/products/search?q=${encodeURIComponent(query)}&in_stock=0&per_page=20`,
+      `${getServerMarketplaceApiBaseUrl()}/products/search?q=${encodeURIComponent(query)}&in_stock=1&per_page=20`,
       { cache: "no-store", headers: { Accept: "application/json" } },
     );
     if (!res.ok) return undefined;

@@ -31,7 +31,6 @@ import {
   parseObjectRemovalMaskFromForm,
   parseStructuralLineMapFromForm,
   parseStyleInspirationImages,
-  parseSurfaceMaterialsFromForm,
 } from "./formParsers";
 
 export interface RenderPhaseProgress {
@@ -87,7 +86,6 @@ export async function runQuickRoomRenderPhase(opts: {
 
   const structuralLineMap = parseStructuralLineMapFromForm(formData);
   const objectRemovalMask = parseObjectRemovalMaskFromForm(formData);
-  const surfaceMaterials = parseSurfaceMaterialsFromForm(formData);
 
   let roomAnalysis: RoomAnalysis | null = null;
   if (roomAnalysisRaw?.trim()) {
@@ -315,7 +313,6 @@ export async function runQuickRoomRenderPhase(opts: {
       productCloseText: visualParts.productCloseText,
       merchantAppendix: geminiMerchantAppendix,
       editContext,
-      surfaceMaterials,
       furnitureLabels,
       onProgress: emitProgress
         ? async (ev) => {

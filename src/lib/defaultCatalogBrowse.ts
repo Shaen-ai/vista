@@ -140,7 +140,7 @@ export async function fetchCatalogSearchFirstPage(
 
   const params = new URLSearchParams({
     q: term,
-    in_stock: "0",
+    in_stock: "1",
     per_page: String(options?.perPage ?? 12),
     page: "1",
   });
@@ -260,7 +260,7 @@ export async function fetchCatalogSearchAllPages(
 
   const params = new URLSearchParams({
     q: term,
-    in_stock: "0",
+    in_stock: "1",
     per_page: String(options?.perPage ?? CATALOG_BROWSE_PER_PAGE),
     page: "1",
   });

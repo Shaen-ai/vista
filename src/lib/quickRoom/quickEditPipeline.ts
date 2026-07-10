@@ -18,7 +18,6 @@ import { buildStructuralMarkupComposite } from "@/lib/buildStructuralMarkupCompo
 import { detectHeroCopy, isHeroCopyGuardEnabled } from "@/lib/falStyleRefCopyGuard";
 import { pipelineLog } from "@/lib/pipelineLog";
 import type { DesignBrief, OpeningBox, RoomAnalysis } from "@/lib/interiorDesignPrompts";
-import type { SurfaceMaterialOverrides } from "@/lib/falPipelinePrompt";
 import {
   buildQuickRoomEditInstruction,
   buildQuickRoomImageRoles,
@@ -53,7 +52,6 @@ export interface QuickEditPipelineInput {
   productCloseText?: string;
   merchantAppendix?: string;
   editContext?: string;
-  surfaceMaterials?: SurfaceMaterialOverrides;
   furnitureLabels?: string[];
   onProgress?: (ev: QuickEditProgressEvent) => void | Promise<void>;
 }
@@ -187,7 +185,6 @@ export async function runQuickRoomEditPipeline(
     productCloseText: input.productCloseText,
     merchantAppendix: input.merchantAppendix,
     editContext: input.editContext,
-    surfaceMaterials: input.surfaceMaterials,
   });
   pipelineLog("FAL_RENDER", "quick room edit pipeline start", {
     projectId,

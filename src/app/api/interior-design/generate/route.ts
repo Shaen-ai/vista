@@ -89,7 +89,6 @@ import {
   parseObjectRemovalMaskFromForm,
   parseStructuralLineMapFromForm,
   parseStyleInspirationImages,
-  parseSurfaceMaterialsFromForm,
 } from "./_lib/formParsers";
 import { resolveQuickRenderModel } from "@/lib/quickRoom/quickRenderModel";
 
@@ -177,7 +176,6 @@ async function handleQuickRoomPost(request: NextRequest) {
       typeof keepRoomShapeRaw === "string" && keepRoomShapeRaw.trim() === "true";
 
     const structuralLineMap = parseStructuralLineMapFromForm(formData);
-    const surfaceMaterials = parseSurfaceMaterialsFromForm(formData);
 
     let roomAnalysis: RoomAnalysis | null = null;
     if (roomAnalysisRaw?.trim()) {
@@ -895,7 +893,6 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
         roomAnalysis,
         roomGeometry,
         doorDesign: brief.doorDesign,
-        surfaceMaterials,
         hasStructuralLines: !!structuralLineMap?.base64,
         hasObjectRemovalMask: !!normalizedRemovalMask?.base64,
       });

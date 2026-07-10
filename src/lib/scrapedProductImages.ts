@@ -19,10 +19,8 @@ export async function fetchScrapedProductImageUrls(
   const ids = marketplaceIds.slice(0, limit * 2); // fetch extra in case some lack images
 
   try {
-    const res = await fetch(`${origin}/api/marketplace/products/batch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
+    const res = await fetch(`${origin}/api/marketplace/products/by-ids?ids=${ids.join(",")}`, {
+      headers: { Accept: "application/json" },
     });
 
     if (!res.ok) {
@@ -30,13 +28,13 @@ export async function fetchScrapedProductImageUrls(
       return [];
     }
 
-    const json = (await res.json()) as { data?: Array<{ image_url?: string }> };
+    const json = (await res.json()) as { data?: Array<{ main_image_url?: string | null }> };
     const products = json.data ?? [];
 
     const urls: string[] = [];
     for (const p of products) {
       if (urls.length >= limit) break;
-      const url = p.image_url;
+      const url = p.main_image_url;
       if (url && /^https?:\/\//i.test(url)) {
         urls.push(url);
       }

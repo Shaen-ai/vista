@@ -117,13 +117,3 @@ test("under budget everything is included, appendix capped at 3800 chars", () =>
   assert.match(prompt, /Design direction: A calm scandinavian living room/);
   assert.match(prompt, /User adjustments: Make the rug blue\./);
 });
-
-test("surface material overrides become a mandatory finishes sentence", () => {
-  const prompt = buildQuickRoomEditInstruction({
-    brief,
-    designStyleLabel: "Modern",
-    imageRoles: "ROLES.",
-    surfaceMaterials: { floor: "light oak parquet", walls: "sage green paint" },
-  });
-  assert.match(prompt, /Surface finishes \(user-selected, mandatory\): floor: light oak parquet; walls: sage green paint\./);
-});

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import {
   Search,
@@ -243,6 +243,47 @@ function selectedProductKey(product: MarketplaceProduct): string {
   return `${product.id}:${product.external_url || product.name}`;
 }
 
+const MOBILE_MEDIA_QUERY = "(max-width: 1024px)";
+
+function subscribeMobileMediaQuery(onChange: () => void) {
+  const mq = window.matchMedia(MOBILE_MEDIA_QUERY);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+
+/**
+ * Product thumbnail with a placeholder fallback. Catalog images are hotlinked
+ * from the retailer's site, so a URL can go dead (404) after the product goes
+ * unavailable — onError swaps in the same ImageIcon shown for missing URLs.
+ */
+function ProductImage({
+  src,
+  alt,
+  iconSize,
+}: {
+  src?: string | null;
+  alt: string;
+  iconSize: number;
+}) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  if (!src || failedSrc === src) {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-[var(--muted-foreground)]">
+        <ImageIcon size={iconSize} />
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="w-full h-full object-cover"
+      loading="lazy"
+      onError={() => setFailedSrc(src)}
+    />
+  );
+}
+
 function ProductCard({
   product,
   onAdd,
@@ -256,18 +297,11 @@ function ProductCard({
   return (
     <div className="cd-product-card h-full flex flex-col rounded-xl overflow-hidden bg-[var(--card)] border border-[var(--border)]">
       <div className="relative aspect-[4/3] bg-[var(--muted)] overflow-hidden">
-        {product.main_image_url ? (
-          <img
-            src={product.main_image_url}
-            alt={product.name_en || product.name}
-            className="w-full h-full object-cover"
-            loading="lazy"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-[var(--muted-foreground)]">
-            <ImageIcon size={32} />
-          </div>
-        )}
+        <ProductImage
+          src={product.main_image_url}
+          alt={product.name_en || product.name}
+          iconSize={32}
+        />
         <div className="absolute top-2 left-2">{marketplaceBadge(product.source_marketplace)}</div>
       </div>
       <div className="p-3 flex-1 flex flex-col gap-1.5 min-w-0">
@@ -310,13 +344,7 @@ function SelectedProductChip({
   return (
     <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-[var(--muted)] border border-[var(--border)] group min-w-0">
       <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-lg overflow-hidden bg-[var(--border)] flex-shrink-0">
-        {product.main_image_url ? (
-          <img src={product.main_image_url} alt="" className="w-full h-full object-cover" loading="lazy" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-[var(--muted-foreground)]">
-            <ImageIcon size={16} />
-          </div>
-        )}
+        <ProductImage src={product.main_image_url} alt="" iconSize={16} />
       </div>
       <div className="flex-1 min-w-0 py-0.5">
         <p className="text-xs sm:text-sm font-medium leading-snug line-clamp-2 break-words">
@@ -366,18 +394,7 @@ function LiveProductCard({
   return (
     <div className="cd-product-card h-full flex flex-col rounded-xl overflow-hidden bg-[var(--card)] border border-[var(--border)]">
       <div className="relative aspect-[4/3] bg-[var(--muted)] overflow-hidden">
-        {product.image_url ? (
-          <img
-            src={product.image_url}
-            alt={product.name}
-            className="w-full h-full object-cover"
-            loading="lazy"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-[var(--muted-foreground)]">
-            <ImageIcon size={32} />
-          </div>
-        )}
+        <ProductImage src={product.image_url} alt={product.name} iconSize={32} />
         <div className="absolute top-2 left-2">
           <span className="cd-media-chip backdrop-blur-sm text-[10px] font-semibold px-2 py-0.5 rounded-full">
             {product.source_marketplace}
@@ -1216,8 +1233,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     mimeType: string;
   } | null>(null);
   const [proModeOpen, setProModeOpen] = useState(false);
-  const [surfaceFloor, setSurfaceFloor] = useState("");
-  const [surfaceWalls, setSurfaceWalls] = useState("");
   const [phasedSlotNotices, setPhasedSlotNotices] = useState<string[]>([]);
 
   const resetPhasedAnnotation = useCallback(() => {
@@ -1225,8 +1240,12 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setPhasedAnnotatedBase64(null);
     setPhasedAnnotatedMimeType(null);
   }, []);
-  const [isMobile, setIsMobile] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(max-width: 1024px)").matches,
+  // useSyncExternalStore keeps hydration clean: the server snapshot (false)
+  // matches the SSR HTML, then React re-syncs to the real viewport right after.
+  const isMobile = useSyncExternalStore(
+    subscribeMobileMediaQuery,
+    () => window.matchMedia(MOBILE_MEDIA_QUERY).matches,
+    () => false,
   );
   const [mobileTab, setMobileTab] = useState<"search" | "design" | "selected">("design");
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -1312,14 +1331,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       setQuickRoomAnalysis(localized);
     }
   }, [locale, quickRoomAnalysis, setQuickRoomAnalysis]);
-
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 1024px)");
-    setIsMobile(mq.matches);
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
 
   useEffect(() => {
     if (!showLanding) {
@@ -1884,13 +1895,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         if (objectRemovalMask?.base64) {
           form.set("objectRemovalMaskBase64", objectRemovalMask.base64);
           form.set("objectRemovalMaskMime", objectRemovalMask.mimeType);
-        }
-
-        const surfaceMaterials: Record<string, string> = {};
-        if (surfaceFloor.trim()) surfaceMaterials.floor = surfaceFloor.trim();
-        if (surfaceWalls.trim()) surfaceMaterials.walls = surfaceWalls.trim();
-        if (Object.keys(surfaceMaterials).length > 0) {
-          form.set("surfaceMaterials", JSON.stringify(surfaceMaterials));
         }
 
         return form;
@@ -3004,7 +3008,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                       {t("landing.quickCardPrice")}
                       <span className="cd-diamond-sm" />
                     </span>
-                    <span className="cd-mode-card-stat">{t("landing.quickCardMeta")}</span>
                   </div>
                 </div>
               </div>
@@ -3791,36 +3794,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                 )}
               </div>
             )}
-
-            <div className="w-full grid grid-cols-2 gap-2">
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-[var(--muted-foreground)]">{t("page.floorMaterialOptional")}</span>
-                <select
-                  value={surfaceFloor}
-                  onChange={(e) => setSurfaceFloor(e.target.value)}
-                  className="rounded-lg px-3 py-2 text-sm bg-[var(--muted)] border border-[var(--border)]"
-                >
-                  <option value="">{t("page.autoMaterial")}</option>
-                  <option value="light oak wood">{t("page.materialWood")}</option>
-                  <option value="marble">{t("page.materialMarble")}</option>
-                  <option value="polished concrete">{t("page.materialConcrete")}</option>
-                  <option value="ceramic tile">{t("page.materialTile")}</option>
-                </select>
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-[var(--muted-foreground)]">{t("page.wallFinishOptional")}</span>
-                <select
-                  value={surfaceWalls}
-                  onChange={(e) => setSurfaceWalls(e.target.value)}
-                  className="rounded-lg px-3 py-2 text-sm bg-[var(--muted)] border border-[var(--border)]"
-                >
-                  <option value="">{t("page.autoMaterial")}</option>
-                  <option value="matte paint">{t("page.materialPaint")}</option>
-                  <option value="wallpaper">{t("page.materialWallpaper")}</option>
-                  <option value="limewash">{t("page.materialLimewash")}</option>
-                </select>
-              </label>
-            </div>
 
             <InspirationProductsPanel
               products={inspirationProducts}
