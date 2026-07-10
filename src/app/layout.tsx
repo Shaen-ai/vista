@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { cookies } from "next/headers";
 import "./globals.css";
@@ -19,6 +19,10 @@ import { buildWebApplicationJsonLd } from "@/lib/jsonLd";
 import { PostHogProvider } from "@/components/PostHogProvider";
 import { GoogleAnalytics } from "@/components/GoogleAnalytics";
 import { CountryBootstrap } from "@/components/CountryBootstrap";
+import { PwaRegister } from "@/components/PwaRegister";
+import { PwaInstallProvider } from "@/components/PwaInstallProvider";
+
+const VISTA_THEME_COLOR = "#1a1614";
 
 const GOOGLE_FONTS_URL =
   "https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300..600;1,300..600&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+Armenian:wght@300;400;500;600;700&family=Noto+Sans+Armenian:wght@400;500;600;700&display=swap";
@@ -32,6 +36,11 @@ export async function generateMetadata(): Promise<Metadata> {
     title,
     description,
     icons: { icon: "/favicon.png", shortcut: "/favicon.png", apple: "/favicon.png" },
+    appleWebApp: {
+      capable: true,
+      title: "Vista",
+      statusBarStyle: "black-translucent",
+    },
     robots: { index: true, follow: true },
     alternates: { canonical: "/" },
     openGraph: {
@@ -40,14 +49,27 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: "Vista",
       title,
       description,
-      images: [{ url: "/opengraph-image", width: 1200, height: 630, alt: "Vista — Interior Design" }],
+      images: [
+        {
+          url: "/landing/landing-quick-room.jpg",
+          width: 1536,
+          height: 1024,
+          alt: "Vista — Interior Design",
+        },
+      ],
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: ["/opengraph-image"],
+      images: ["/landing/landing-quick-room.jpg"],
     },
+  };
+}
+
+export function generateViewport(): Viewport {
+  return {
+    themeColor: VISTA_THEME_COLOR,
   };
 }
 
@@ -81,12 +103,15 @@ export default async function RootLayout({
           {VISTA_THEME_BOOT_SCRIPT}
         </Script>
         <PostHogProvider>
-          <VistaLocaleProvider initialLocale={ssrLocale}>
-            <VistaThemeProvider initialTheme={ssrTheme}>
-              <CountryBootstrap />
-              {children}
-            </VistaThemeProvider>
-          </VistaLocaleProvider>
+          <PwaInstallProvider>
+            <VistaLocaleProvider initialLocale={ssrLocale}>
+              <VistaThemeProvider initialTheme={ssrTheme}>
+                <PwaRegister />
+                <CountryBootstrap />
+                {children}
+              </VistaThemeProvider>
+            </VistaLocaleProvider>
+          </PwaInstallProvider>
         </PostHogProvider>
       </body>
     </html>

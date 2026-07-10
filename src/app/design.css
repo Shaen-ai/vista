@@ -226,6 +226,21 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
   animation: cd-menu-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+.cd-pwa-ios-sheet {
+  position: fixed;
+  left: 50%;
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  z-index: 55;
+  width: min(20rem, calc(100vw - 1.5rem));
+  transform: translateX(-50%);
+  animation: cd-menu-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.cd-pwa-install-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 4px color-mix(in srgb, var(--ring) 55%, transparent);
+}
+
 .cd-header-sheet {
   background: var(--background);
   border: 1px solid var(--border);

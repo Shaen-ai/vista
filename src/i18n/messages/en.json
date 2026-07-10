@@ -103,7 +103,15 @@
     "shareToEarn": "Share this link — earn 20 tokens each time a friend joins",
     "earnedOfCap": "{earned} / {cap} tokens earned",
     "copyLink": "Copy link",
-    "loadError": "Couldn't load your invite link"
+    "loadError": "Couldn't load your invite link",
+    "shareVia": "Share via",
+    "shareMessage": "Join me on Vista — get free tokens to design your room: {url}",
+    "shareWhatsApp": "Share on WhatsApp",
+    "shareTelegram": "Share on Telegram",
+    "shareFacebook": "Share on Facebook",
+    "shareMessenger": "Share on Messenger",
+    "shareInstagram": "Share on Instagram",
+    "pasteInChat": "Link copied — paste in chat"
   },
   "components": {
     "cameraTitle": "Take a photo",
@@ -762,6 +770,13 @@
   "meta": {
     "title": "Vista — Interior Design",
     "description": "Design your room with real furniture from Armenian marketplaces."
+  },
+  "pwa": {
+    "install": "Install",
+    "dismiss": "Dismiss install",
+    "iosTitle": "Add Vista to your home screen",
+    "iosSteps": "Tap the Share button in your browser, then choose Add to Home Screen.",
+    "iosShareHint": "Share → Add to Home Screen"
   },
   "modeHub": {
     "quickTitle": "Your Quick Room designs",

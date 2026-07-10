@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Gift } from "lucide-react";
 import { getAuthToken, fetchReferralLink } from "@/lib/authApi";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
+import { InviteShareButtons } from "@/components/inviteShare";
 
 type ReferralLink = {
   code: string;
@@ -23,6 +24,7 @@ export function VistaInviteFriends({ compact = false, layout = "inline" }: Vista
   const [link, setLink] = useState<ReferralLink | null>(null);
   const [loadState, setLoadState] = useState<"idle" | "loading" | "error">("idle");
   const [copied, setCopied] = useState(false);
+  const [pasteTip, setPasteTip] = useState(false);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -65,7 +67,14 @@ export function VistaInviteFriends({ compact = false, layout = "inline" }: Vista
     }
   }
 
+  function handleCopyThenOpen() {
+    setPasteTip(true);
+    setTimeout(() => setPasteTip(false), 2000);
+  }
+
   if (loggedIn !== true) return null;
+
+  const shareMessage = link ? t("referral.shareMessage", { url: link.url }) : "";
 
   const body = (
     <>
@@ -110,6 +119,18 @@ export function VistaInviteFriends({ compact = false, layout = "inline" }: Vista
             )}
             {copied ? t("common.copied") : t("referral.copyLink")}
           </button>
+          <InviteShareButtons
+            url={link.url}
+            message={shareMessage}
+            layout={layout}
+            t={t}
+            onCopyThenOpen={handleCopyThenOpen}
+          />
+          {pasteTip && (
+            <p className={layout === "sheet" ? "cd-header-sheet-note" : "px-3 pb-1 text-xs text-[var(--muted-foreground)]"}>
+              {t("referral.pasteInChat")}
+            </p>
+          )}
           <p className={layout === "sheet" ? "cd-header-sheet-note" : "px-3 pb-2 text-xs text-[var(--muted-foreground)]"}>
             {t("referral.earnedOfCap", {
               earned: link.referralTokensEarned,

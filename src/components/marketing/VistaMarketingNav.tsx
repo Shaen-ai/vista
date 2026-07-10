@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { PwaInstallButton } from "@/components/PwaInstallButton";
 
 const NAV_LINKS = [
   { href: "/", label: "Home" },
@@ -15,6 +18,9 @@ export function VistaMarketingNav() {
         <Link href="/" className="text-xl font-bold italic text-[var(--foreground)]">
           vista
         </Link>
+        <div className="flex items-center gap-2 md:hidden">
+          <PwaInstallButton variant="nav" />
+        </div>
         <div className="hidden items-center gap-6 md:flex">
           {NAV_LINKS.map((link) => (
             <Link

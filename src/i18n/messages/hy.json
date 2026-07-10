@@ -103,7 +103,15 @@
     "shareToEarn": "Կիսվեք այս հղումով — ստացեք 20 թոքեն յուրաքանչյուր ընկերոջ համար",
     "earnedOfCap": "{earned} / {cap} թոքեն ստացված",
     "copyLink": "Պատճենել հղումը",
-    "loadError": "Չհաջողվեց բեռնել ձեր հրավերի հղումը"
+    "loadError": "Չհաջողվեց բեռնել ձեր հրավերի հղումը",
+    "shareVia": "Կիսվել",
+    "shareMessage": "Միացիր ինձ Vista-ում — ստացիր անվճար թոքեններ սենյակի դիզայնի համար՝ {url}",
+    "shareWhatsApp": "Կիսվել WhatsApp-ում",
+    "shareTelegram": "Կիսվել Telegram-ում",
+    "shareFacebook": "Կիսվել Facebook-ում",
+    "shareMessenger": "Կիսվել Messenger-ում",
+    "shareInstagram": "Կիսվել Instagram-ում",
+    "pasteInChat": "Հղումը պատճենված է — տեղադրեք զրույցում"
   },
   "components": {
     "cameraTitle": "Լուսանկարել",
@@ -731,6 +739,13 @@
   "meta": {
     "title": "Vista — ինտերիերի դիզայն",
     "description": "Ստեղծեք սենյակի դիզայն իրական կահոյքով հայկական շուկաներից։"
+  },
+  "pwa": {
+    "install": "Տեղադրել",
+    "dismiss": "Թաքցնել տեղադրումը",
+    "iosTitle": "Ավելացրեք Vista-ն գլխավոր էկրանին",
+    "iosSteps": "Սեղմեք «Կիսվել» կոճակը բրաուզերում, ապա ընտրեք «Ավելացնել գլխավոր էկրանին»։",
+    "iosShareHint": "Կիսվել → Ավելացնել գլխավոր էկրանին"
   },
   "modeHub": {
     "quickTitle": "Ձեր Quick Room դիզայնները",

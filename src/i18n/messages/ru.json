@@ -103,7 +103,15 @@
     "shareToEarn": "Поделитесь ссылкой — получайте 20 токенов за каждого друга",
     "earnedOfCap": "{earned} / {cap} токенов получено",
     "copyLink": "Скопировать ссылку",
-    "loadError": "Не удалось загрузить вашу реферальную ссылку"
+    "loadError": "Не удалось загрузить вашу реферальную ссылку",
+    "shareVia": "Поделиться через",
+    "shareMessage": "Присоединяйся ко мне в Vista — получи бесплатные токены для дизайна комнаты: {url}",
+    "shareWhatsApp": "Поделиться в WhatsApp",
+    "shareTelegram": "Поделиться в Telegram",
+    "shareFacebook": "Поделиться в Facebook",
+    "shareMessenger": "Поделиться в Messenger",
+    "shareInstagram": "Поделиться в Instagram",
+    "pasteInChat": "Ссылка скопирована — вставьте в чат"
   },
   "components": {
     "cameraTitle": "Сделать фото",
@@ -731,6 +739,13 @@
   "meta": {
     "title": "Vista — дизайн интерьера",
     "description": "Создайте дизайн комнаты с реальной мебелью с армянских маркетплейсов."
+  },
+  "pwa": {
+    "install": "Установить",
+    "dismiss": "Скрыть установку",
+    "iosTitle": "Добавьте Vista на главный экран",
+    "iosSteps": "Нажмите «Поделиться» в браузере, затем выберите «На экран Домой».",
+    "iosShareHint": "Поделиться → На экран Домой"
   },
   "modeHub": {
     "quickTitle": "Ваши дизайны Quick Room",

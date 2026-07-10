@@ -9,6 +9,7 @@ import { DevSpendBadge } from "@/components/DevSpendBadge";
 import { LanguageSwitcher } from "@/i18n/LanguageSwitcher";
 import { VISTA_LOCALES, type VistaLocale } from "@/i18n/locales";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
+import { PwaInstallButton } from "@/components/PwaInstallButton";
 
 type VistaHeaderActionsProps = {
   tokenBalance: number | null;
@@ -90,6 +91,7 @@ export function VistaHeaderActions({
 
       {/* Mobile — balance + editorial sheet menu */}
       <div ref={menuRef} className="relative flex md:hidden items-center gap-2 min-w-0 shrink-0">
+        <PwaInstallButton />
         <FillBalanceButton
           balance={tokenBalance}
           onBalanceChange={onBalanceChange}
