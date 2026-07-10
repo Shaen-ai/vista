@@ -28,6 +28,7 @@ import {
   Package,
   AlertCircle,
   PenTool,
+  Paintbrush,
   Download,
   Save,
   Check,
@@ -90,6 +91,7 @@ const GenerationDebugPanel = dynamic(
 );
 import { isArmeniaLocalScrapedExclusive } from "@/lib/scrapedAllowlist";
 import { analyzeAndRedesign, runPhasedGeneration } from "@/lib/analyzeAndRedesign";
+import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
 import type { GenerationClientTrace } from "@/lib/generationDebug";
 import { catalogCategorySortKey, PRODUCT_DISPLAY_BAND } from "@/lib/productDisplayOrder";
 import {
@@ -226,6 +228,7 @@ function mapLiveToMarketplace(product: LiveSearchProduct, idx: number): Marketpl
     name_en: product.name,
     price: product.price,
     currency: product.currency,
+    old_price: product.old_price,
     main_image_url: product.image_url,
     images: product.image_url ? [product.image_url] : null,
     width_cm: product.width_cm ? parseFloat(product.width_cm) : null,
@@ -313,9 +316,16 @@ function ProductCard({
           </p>
         )}
         <div className="flex flex-col gap-2 mt-auto min-w-0">
-          <span className="text-sm font-bold text-[var(--primary)] tabular-nums leading-tight truncate">
-            {formatAMD(product.price)}
-          </span>
+          <div className="min-w-0">
+            <span className="text-sm font-bold text-[var(--primary)] tabular-nums leading-tight truncate block">
+              {formatAMD(product.price)}
+            </span>
+            {product.old_price != null && product.old_price > product.price && (
+              <span className="text-[10px] text-[var(--muted-foreground)] line-through tabular-nums">
+                {formatAMD(product.old_price)}
+              </span>
+            )}
+          </div>
           <button
             onClick={onAdd}
             disabled={isSelected}
@@ -352,6 +362,11 @@ function SelectedProductChip({
         </p>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
           <p className="text-xs font-bold text-[var(--primary)] tabular-nums">{formatAMD(product.price)}</p>
+          {product.old_price != null && product.old_price > product.price && (
+            <p className="text-[10px] text-[var(--muted-foreground)] line-through tabular-nums">
+              {formatAMD(product.old_price)}
+            </p>
+          )}
           {product.external_url && (
             <a
               href={product.external_url}
@@ -835,7 +850,7 @@ function InspirationProductsPanel({
           onClick={() => fileRef.current?.click()}
         >
           <Package size={24} className="text-[var(--muted-foreground)] opacity-50" />
-          <p className="text-[10px] text-[var(--muted-foreground)]">
+          <p className={`text-[10px] text-[var(--muted-foreground)] text-center leading-snug ${isMobile ? "px-5" : "px-3"}`}>
             {t("project.inspirationHint")}
           </p>
         </div>
@@ -1223,16 +1238,12 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const [phasedMarkerMode, setPhasedMarkerMode] = useState(false);
   const [phasedAnnotatedBase64, setPhasedAnnotatedBase64] = useState<string | null>(null);
   const [phasedAnnotatedMimeType, setPhasedAnnotatedMimeType] = useState<string | null>(null);
-  const [structuralLineMap, setStructuralLineMap] = useState<{
-    base64: string;
-    mimeType: string;
-    strokeOnly: boolean;
-  } | null>(null);
   const [objectRemovalMask, setObjectRemovalMask] = useState<{
     base64: string;
     mimeType: string;
   } | null>(null);
-  const [proModeOpen, setProModeOpen] = useState(false);
+  const [removalEditorOpen, setRemovalEditorOpen] = useState(false);
+  const [placementMode, setPlacementMode] = useState<QuickRoomPlacementMode>("redesign");
   const [phasedSlotNotices, setPhasedSlotNotices] = useState<string[]>([]);
 
   const resetPhasedAnnotation = useCallback(() => {
@@ -1315,9 +1326,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           : generatePhaseMessage;
 
   useEffect(() => {
-    setStructuralLineMap(null);
     setObjectRemovalMask(null);
-    setProModeOpen(false);
+    setRemovalEditorOpen(false);
   }, [roomImageBase64]);
 
   useEffect(() => {
@@ -1731,11 +1741,15 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         !quickRoomAnalyzeError,
     );
 
+  const hasProvidedProducts =
+    inspirationProducts.length > 0 || selectedProducts.length > 0;
+
   const generateFormReady =
     !!roomImageBase64 &&
     !!textPrompt.trim() &&
     !isGenerating &&
-    quickRoomSpatialReady;
+    quickRoomSpatialReady &&
+    (placementMode !== "placeOnly" || hasProvidedProducts);
 
   const insufficientTokensForGenerate =
     tokenBalance !== null && tokenBalance < TOKEN_COSTS.generate;
@@ -1816,8 +1830,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         form.set("countryCode", selectedCountry);
         form.set("searchMode", searchMode);
         form.set("designMode", designMode);
+        form.set("placementMode", placementMode);
         // Custom mode is a free render with no catalog tie — don't trigger the
-        // scraped-catalog path (quickRoomMode) or send any product constraints.
+        // scraped-catalog path (quickRoomMode) or send catalog allowlist constraints.
         if (!isCustom) {
           form.set("quickRoomMode", "true");
         }
@@ -1850,7 +1865,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         const doorDesign = designBrief?.doorDesign?.trim();
         if (doorDesign) form.set("doorDesign", doorDesign);
 
-        if (!isCustom && selectedProducts.length > 0) {
+        if (selectedProducts.length > 0) {
           form.set("designBoardProductIds", JSON.stringify(selectedProducts.map((p) => p.id)));
         }
 
@@ -1864,7 +1879,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           form.set("catalogAllowlistIds", JSON.stringify(allowlistIds.slice(0, 120)));
         }
 
-        if (!isCustom && inspirationProducts.length > 0) {
+        if (inspirationProducts.length > 0) {
           for (const ip of inspirationProducts) {
             if (ip.base64 && ip.mimeType) {
               const ipBlob = await fetch(`data:${ip.mimeType};base64,${ip.base64}`).then((r) => r.blob());
@@ -1880,19 +1895,11 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           }
         }
 
-        if (styleInspirations.length > 0) {
+        if (placementMode === "redesign" && styleInspirations.length > 0) {
           await appendStyleInspirationsToFormAsync(form, styleInspirations);
         }
 
-        if (structuralLineMap?.base64) {
-          form.set("structuralLineMapBase64", structuralLineMap.base64);
-          form.set("structuralLineMapMime", structuralLineMap.mimeType);
-          if (structuralLineMap.strokeOnly) {
-            form.set("structuralLineStrokeOnly", "true");
-          }
-        }
-
-        if (objectRemovalMask?.base64) {
+        if (placementMode === "redesign" && objectRemovalMask?.base64) {
           form.set("objectRemovalMaskBase64", objectRemovalMask.base64);
           form.set("objectRemovalMaskMime", objectRemovalMask.mimeType);
         }
@@ -2068,6 +2075,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     searchResults,
     inspirationProducts,
     styleInspirations,
+    placementMode,
+    objectRemovalMask,
     selectedCountry,
     searchMode,
     vistaMode,
@@ -3095,10 +3104,11 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                 )}
                 <button
                   type="button"
-                  className="cd-panel-done-btn"
+                  className="cd-panel-close-btn"
                   onClick={() => setMobileTab("design")}
+                  aria-label={t("common.close")}
                 >
-                  {t("common.done")}
+                  <X size={18} aria-hidden />
                 </button>
               </div>
             </div>
@@ -3159,6 +3169,19 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               </div>
             )}
           </div>
+
+          {showAllProductsButton && !searchLoading && !liveSearchLoading && isMobile && (
+            <div className="shrink-0 p-3 border-b border-[var(--border)]">
+              <button
+                type="button"
+                onClick={() => setAllProductsModalOpen(true)}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold border border-[var(--primary)]/30 bg-[var(--primary)]/10 text-[var(--foreground)] hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/15 transition-colors cursor-pointer"
+              >
+                <ShoppingBag size={16} className="shrink-0 text-[var(--primary)]" />
+                {t("page.showAllProducts", { count: browseProductCount })}
+              </button>
+            </div>
+          )}
 
           {/* Results — up to 50 in sidebar; full catalog + live in modal */}
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
@@ -3235,7 +3258,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               ) : null}
             </div>
 
-            {showAllProductsButton && !searchLoading && !liveSearchLoading && (
+            {showAllProductsButton && !searchLoading && !liveSearchLoading && !isMobile && (
               <div className="shrink-0 p-3 pt-0 border-t border-[var(--border)]">
                 <button
                   type="button"
@@ -3711,10 +3734,34 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               </div>
             )}
 
-            <div className="w-full">
-              <div className="cd-work-divider mb-3">
-                <span className="cd-work-divider-text">{t("page.style")}</span>
+            <div className="w-full flex flex-col gap-2">
+              <span className="cd-field-label">{t("page.placementModeLabel")}</span>
+              <div className="cd-segment-toggle">
+                <button
+                  type="button"
+                  onClick={() => setPlacementMode("redesign")}
+                  className={`cd-segment-toggle-btn${placementMode === "redesign" ? " cd-segment-toggle-btn--active" : ""}`}
+                >
+                  {t("page.placementModeRedesign")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPlacementMode("placeOnly")}
+                  className={`cd-segment-toggle-btn${placementMode === "placeOnly" ? " cd-segment-toggle-btn--active" : ""}`}
+                >
+                  {t("page.placementModePlaceOnly")}
+                </button>
               </div>
+              <p className="text-xs text-[var(--muted-foreground)] leading-snug">
+                {placementMode === "placeOnly"
+                  ? t("page.placementModePlaceOnlyHint")
+                  : t("page.placementModeHint")}
+              </p>
+            </div>
+
+            {placementMode === "redesign" && (
+            <div className="w-full flex flex-col gap-2">
+              <span className="cd-field-label">{t("page.style")}</span>
               <div className={isMobile ? "cd-style-pills-scroll" : "flex flex-wrap gap-2"}>
                 {quickStyles.map((s) => (
                   <button
@@ -3731,34 +3778,25 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                 ))}
               </div>
             </div>
+            )}
 
-            {roomImageBase64 && roomImageMimeType && (
-              <div className="w-full">
-                <div className="cd-work-divider mb-3">
-                  <span className="cd-work-divider-text">{t("components.proModeStructuralTitle")}</span>
-                </div>
-                {!proModeOpen && !structuralLineMap && !objectRemovalMask ? (
+            {placementMode === "redesign" && roomImageBase64 && roomImageMimeType && (
+              <div className="w-full flex flex-col gap-2">
+                <span className="cd-field-label">{t("components.removeItemsTitle")}</span>
+                {!removalEditorOpen && !objectRemovalMask ? (
                   <button
                     type="button"
-                    onClick={() => setProModeOpen(true)}
+                    onClick={() => setRemovalEditorOpen(true)}
                     className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-[var(--primary)]/40 text-sm font-medium text-[var(--foreground)] hover:border-[var(--primary)] cursor-pointer w-full justify-center"
                   >
-                    <PenTool size={16} />
-                    {t("components.proModeStructuralOpen")}
+                    <Paintbrush size={16} />
+                    {t("components.removeItemsOpen")}
                   </button>
-                ) : proModeOpen ? (
+                ) : removalEditorOpen ? (
                   <StructuralBoundaryCanvas
+                    variant="removeOnly"
                     imageSrc={`data:${roomImageMimeType};base64,${roomImageBase64}`}
                     onExport={(result) => {
-                      if (result.hasStructuralLines) {
-                        setStructuralLineMap({
-                          base64: result.strokeMapBase64,
-                          mimeType: result.strokeMapMimeType,
-                          strokeOnly: true,
-                        });
-                      } else {
-                        setStructuralLineMap(null);
-                      }
                       if (result.hasRemovalMask && result.removalMaskBase64) {
                         setObjectRemovalMask({
                           base64: result.removalMaskBase64,
@@ -3767,24 +3805,22 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                       } else {
                         setObjectRemovalMask(null);
                       }
-                      setProModeOpen(false);
+                      setRemovalEditorOpen(false);
                     }}
                     onSkip={() => {
-                      setStructuralLineMap(null);
                       setObjectRemovalMask(null);
-                      setProModeOpen(false);
+                      setRemovalEditorOpen(false);
                     }}
-                    onFinish={() => setProModeOpen(false)}
+                    onFinish={() => setRemovalEditorOpen(false)}
                   />
                 ) : (
                   <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[var(--muted)] border border-[var(--border)]">
-                    <span className="text-sm text-[var(--foreground)]">{t("components.proModeStructuralDone")}</span>
+                    <span className="text-sm text-[var(--foreground)]">{t("components.removeItemsDone")}</span>
                     <button
                       type="button"
                       onClick={() => {
-                        setStructuralLineMap(null);
                         setObjectRemovalMask(null);
-                        setProModeOpen(true);
+                        setRemovalEditorOpen(true);
                       }}
                       className="text-xs font-medium text-[var(--primary)] hover:underline cursor-pointer"
                     >
@@ -3812,12 +3848,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               isMobile={isMobile}
             />
 
+            {placementMode === "redesign" && (
             <StyleInspirationPanel
               images={styleInspirations}
               onAddImage={(base64, mimeType) => addStyleInspiration({ base64, mimeType })}
               onRemove={removeStyleInspiration}
               isMobile={isMobile}
             />
+            )}
 
             <div className="w-full flex flex-col gap-3">
               <textarea
@@ -3849,6 +3887,11 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                   </>
                 )}
               </button>
+              {placementMode === "placeOnly" && !hasProvidedProducts && (
+                <p className="text-xs text-[var(--muted-foreground)] text-center">
+                  {t("page.placementModeNeedProducts")}
+                </p>
+              )}
             </div>
 
             {error && (
@@ -4100,25 +4143,25 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                   </div>
                 )}
 
-                {/* Action buttons */}
+                {/* Action buttons — Download is primary; regenerate/mark are secondary */}
                 <div className={`flex gap-3 ${isMobile ? "flex-col" : ""}`}>
-                  <button
-                    onClick={handleRegenerate}
-                    disabled={isGenerating || (tokenBalance !== null && tokenBalance < TOKEN_COSTS.regenerate)}
-                    className={`${isMobile ? "w-full" : "flex-1"} py-3 rounded-xl bg-orange-500 text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-50`}
-                  >
-                    <RefreshCw size={18} /> {t("tokens.regenerate")}
-                  </button>
-                  <div className={`flex gap-3 ${isMobile ? "w-full" : ""}`}>
                   <button
                     type="button"
                     onClick={handleDownloadGenerated}
                     disabled={isGenerating}
-                    className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50`}
+                    className={`${isMobile ? "w-full" : "flex-1"} py-3 rounded-xl bg-orange-500 text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-50`}
                     title={t("page.downloadDesign")}
                   >
-                    <Download size={18} />
-                    {!isMobile && t("page.downloadDesign")}
+                    <Download size={18} /> {t("page.downloadDesign")}
+                  </button>
+                  <div className={`flex gap-3 ${isMobile ? "w-full" : ""}`}>
+                  <button
+                    onClick={handleRegenerate}
+                    disabled={isGenerating || (tokenBalance !== null && tokenBalance < TOKEN_COSTS.regenerate)}
+                    className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50`}
+                    title={t("tokens.regenerate")}
+                  >
+                    <RefreshCw size={18} /> {t("tokens.regenerate")}
                   </button>
                   <button
                     onClick={() => setMarkerMode((on) => !on)}

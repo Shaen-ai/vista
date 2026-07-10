@@ -27,6 +27,7 @@ export interface MarketplaceProduct {
   name_en: string | null;
   price: number;
   currency: string;
+  old_price?: number | null;
   main_image_url: string | null;
   images: string[] | null;
   width_cm: number | null;

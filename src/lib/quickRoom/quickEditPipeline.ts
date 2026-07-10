@@ -18,6 +18,7 @@ import { buildStructuralMarkupComposite } from "@/lib/buildStructuralMarkupCompo
 import { detectHeroCopy, isHeroCopyGuardEnabled } from "@/lib/falStyleRefCopyGuard";
 import { pipelineLog } from "@/lib/pipelineLog";
 import type { DesignBrief, OpeningBox, RoomAnalysis } from "@/lib/interiorDesignPrompts";
+import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
 import {
   buildQuickRoomEditInstruction,
   buildQuickRoomImageRoles,
@@ -41,6 +42,7 @@ export interface QuickEditPipelineInput {
   roomAnalysis: RoomAnalysis | null;
   /** True when the "photo" is a previously generated render (keepRoomShape edit loop) — client boxes are stale. */
   isEditOfRender: boolean;
+  placementMode?: QuickRoomPlacementMode;
   objectRemovalMaskBase64?: string | null;
   structuralLineMap?: { base64: string; strokeOnly: boolean } | null;
   /** Product collage sheets from buildGeminiProductVisualParts. */
@@ -185,6 +187,7 @@ export async function runQuickRoomEditPipeline(
     productCloseText: input.productCloseText,
     merchantAppendix: input.merchantAppendix,
     editContext: input.editContext,
+    placementMode: input.placementMode,
   });
   pipelineLog("FAL_RENDER", "quick room edit pipeline start", {
     projectId,

@@ -48,6 +48,19 @@ test("single sheet uses singular image role numbering", () => {
   assert.match(roles, /Image 3 is the user's STYLE INSPIRATION/);
 });
 
+test("edit instruction uses place-only CHANGE when placementMode is placeOnly", () => {
+  const prompt = buildQuickRoomEditInstruction({
+    brief,
+    designStyleLabel: "Scandinavian",
+    imageRoles: "IMAGE ROLES: test.",
+    placementMode: "placeOnly",
+  });
+  assert.match(prompt, /CHANGE: Place only the user-provided product\(s\)/);
+  assert.doesNotMatch(prompt, /CHANGE: Redesign this room/);
+  assert.doesNotMatch(prompt, /Door styling:/);
+  assert.match(prompt, /Placement direction:/);
+});
+
 test("edit instruction carries PRESERVE scaffold with opening counts", () => {
   const prompt = buildQuickRoomEditInstruction({
     brief,

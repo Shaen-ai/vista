@@ -113,9 +113,60 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
 /* ── Style pill ── */
 .cd-style-pill { transition: all 0.15s ease; }
 .cd-style-pill--active {
-  background: var(--foreground) !important;
-  color: var(--background) !important;
-  border-color: var(--foreground) !important;
+  background: var(--card) !important;
+  color: var(--foreground) !important;
+  border-color: color-mix(in srgb, var(--foreground) 28%, var(--border)) !important;
+  box-shadow: 0 1px 2px rgba(60, 40, 20, 0.06);
+}
+
+/* ── Work-area segmented control (soft, not CTA-like) ── */
+.cd-segment-toggle {
+  display: flex;
+  width: 100%;
+  background: var(--muted);
+  border-radius: 10px;
+  padding: 3px;
+  gap: 3px;
+  border: 1px solid var(--border);
+}
+.cd-segment-toggle-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  cursor: pointer;
+  border: none;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.cd-segment-toggle-btn--active {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 1px 3px rgba(60, 40, 20, 0.08);
+}
+.cd-segment-toggle-btn:hover:not(.cd-segment-toggle-btn--active) {
+  color: var(--foreground);
+}
+
+@media (max-width: 768px) {
+  .cd-segment-toggle-btn {
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+}
+
+.cd-field-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
 }
 
 /* ── Generate button glow ── */
@@ -1260,6 +1311,26 @@ html[data-vista-theme="light"] .cd-page .cd-mode-card--selected {
 
 .cd-panel-done-btn:hover {
   background: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.cd-panel-close-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.cd-panel-close-btn:hover {
+  color: var(--foreground);
+  background: var(--muted);
 }
 
 .cd-browse-catalog-chip {

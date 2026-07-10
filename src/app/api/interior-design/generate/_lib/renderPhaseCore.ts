@@ -180,7 +180,11 @@ export async function runQuickRoomRenderPhase(opts: {
     designBoardProductIds: sessionBoardIds,
     adminSlug: sessionAdminSlug,
     designStyleLabel: sessionStyleLabel,
+    placementMode: sessionPlacementMode,
   } = renderSession;
+
+  const placementMode = sessionPlacementMode ?? "redesign";
+  const isPlaceOnly = placementMode === "placeOnly";
 
   // Prefer the mode captured at brief time; fall back to the recomputed value
   // for sessions minted before isCustomMode was carried in the session.
@@ -268,10 +272,12 @@ export async function runQuickRoomRenderPhase(opts: {
           cellRefByCatalogId: visualParts.cellRefByCatalogId,
         });
 
-  const styleInspirationInlines = styleInspirations.map((item) => ({
-    mimeType: item.mimeType,
-    data: item.base64,
-  }));
+  const styleInspirationInlines = isPlaceOnly
+    ? []
+    : styleInspirations.map((item) => ({
+        mimeType: item.mimeType,
+        data: item.base64,
+      }));
 
   const useEditPipeline = resolveQuickRenderModel() === "edit-pipeline" && !!referenceBase64;
 
@@ -299,12 +305,13 @@ export async function runQuickRoomRenderPhase(opts: {
       roomPhotoMime: referenceImageMimeType || "image/jpeg",
       roomAnalysis,
       isEditOfRender: keepRoomShape,
-      objectRemovalMaskBase64: objectRemovalMask?.base64 ?? null,
+      placementMode,
+      objectRemovalMaskBase64: isPlaceOnly ? null : objectRemovalMask?.base64 ?? null,
       structuralLineMap: structuralLineMap
         ? { base64: structuralLineMap.base64, strokeOnly: structuralLineMap.strokeOnly }
         : null,
       productSheetInlines: visualParts.productImageParts.map((p) => p.inlineData),
-      styleInspiration: styleInspirations[0]
+      styleInspiration: !isPlaceOnly && styleInspirations[0]
         ? { base64: styleInspirations[0].base64, mimeType: styleInspirations[0].mimeType }
         : null,
       brief,

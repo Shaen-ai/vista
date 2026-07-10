@@ -1,4 +1,5 @@
 import type { DesignBrief } from "@/lib/interiorDesignPrompts";
+import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
 import type { QuickRenderModel } from "@/lib/quickRoom/quickRenderModel";
 
 export interface InteriorRenderSession {
@@ -11,6 +12,8 @@ export interface InteriorRenderSession {
   designStyleLabel: string;
   /** Optional for backward compat with sessions minted before this field existed. */
   isCustomMode?: boolean;
+  /** Optional — defaults to full redesign for sessions minted before this field existed. */
+  placementMode?: QuickRoomPlacementMode;
   /**
    * Render engine chosen at brief time — the client uses it to pick the
    * transport (SSE for edit-pipeline, plain POST for legacy). Optional for

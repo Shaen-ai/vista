@@ -87,6 +87,7 @@ import {
   parseInspirationProducts,
   parseNumericIdListFromForm,
   parseObjectRemovalMaskFromForm,
+  parseQuickRoomPlacementMode,
   parseStructuralLineMapFromForm,
   parseStyleInspirationImages,
 } from "./_lib/formParsers";
@@ -147,6 +148,8 @@ async function handleQuickRoomPost(request: NextRequest) {
     // "custom" (default) = free imaginary render with NO catalog tie (no product
     // matching, no product cards). "made" keeps the existing real-catalog behavior.
     const isCustomMode = String(formData.get("designMode") ?? "custom").trim() === "custom";
+    const placementMode = parseQuickRoomPlacementMode(formData.get("placementMode"));
+    const isPlaceOnly = placementMode === "placeOnly";
     const localModeRequested = isArmeniaLocalScrapedExclusive(countryCode, searchMode);
     const dbExclusiveRequested = !isCustomMode && (localModeRequested || quickRoomMode);
 
@@ -351,7 +354,8 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
         vectorCatalogMode: isCustomMode ? false : useVectorCatalog,
         freeRender: isCustomMode,
         inspirationImageCount: inspirationItems.length,
-        styleInspirationCount: styleInspirations.length,
+        styleInspirationCount: isPlaceOnly ? 0 : styleInspirations.length,
+        placementMode,
       },
     );
 
@@ -393,7 +397,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
         text: `[Uploaded product image ${i + 1}${item.label ? `: "${item.label}"` : ""}]`,
       });
     }
-    for (let i = 0; i < styleInspirations.length; i++) {
+    for (let i = 0; i < (isPlaceOnly ? 0 : styleInspirations.length); i++) {
       const item = styleInspirations[i]!;
       claudeContent.push({
         type: "image",
@@ -522,7 +526,25 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
       inspirationItems.length > 0 ? uploadSlotDefs : [],
     );
 
-    if (useVectorCatalog) {
+    if (isPlaceOnly) {
+      if (designBoardProductIds.length > 0) {
+        const pinRows = await fetchMarketplaceProductsAsCatalog(designBoardProductIds);
+        for (const row of pinRows) {
+          catalogCtx.summaryById.set(row.id, row);
+        }
+        resolvedNumericIds = designBoardProductIds.filter((id) =>
+          catalogCtx.summaryById.has(`mp-${id}`),
+        );
+      }
+      timer.mark("resolve_catalog", {
+        useVectorCatalog: false,
+        placementMode,
+        resolvedCount: resolvedNumericIds.length,
+        slotCount: 0,
+        failedSlotCount: 0,
+        perSlot: [],
+      });
+    } else if (useVectorCatalog) {
       const designIntent =
         brief.designIntent.trim() ||
         buildDesignIntentFromBrief({
@@ -664,7 +686,9 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
       .filter((k) => allowedCatalogKeys.has(k));
 
     let selectedForGemini: string[];
-    if (useVectorCatalog) {
+    if (isPlaceOnly) {
+      selectedForGemini = [...pinnedMpKeys];
+    } else if (useVectorCatalog) {
       selectedForGemini = resolvedNumericIds
         .map((n) => `mp-${n}`)
         .filter((k) => catalogCtx.summaryById.has(k));
@@ -709,7 +733,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
       selectedForGemini,
       catalogCtx.summaryById,
       brief.fullPrompt,
-      catalogResolutionSlots,
+      isPlaceOnly ? [] : catalogResolutionSlots,
       new Set(pinnedMpKeys),
     );
 
@@ -727,7 +751,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
       allowedCatalogKeys: new Set(catalogCtx.summaryById.keys()),
     });
 
-    if (!isCustomMode && useVectorCatalog && scrapedInventoryExclusive && selectedForGemini.length === 0) {
+    if (!isPlaceOnly && !isCustomMode && useVectorCatalog && scrapedInventoryExclusive && selectedForGemini.length === 0) {
       return NextResponse.json(
         {
           error:
@@ -750,6 +774,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
             adminSlug,
             designStyleLabel,
             isCustomMode,
+            placementMode,
             renderEngine: resolveQuickRenderModel(),
           } satisfies InteriorRenderSession,
         },

@@ -1,4 +1,5 @@
 import type { DesignBrief } from "@/lib/interiorDesignPrompts";
+import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
 import { buildPreserveScaffold } from "@/lib/project/editPromptAssembly";
 
 /**
@@ -59,17 +60,24 @@ export interface QuickRoomEditInstructionInput {
   productCloseText?: string;
   merchantAppendix?: string;
   editContext?: string;
+  placementMode?: QuickRoomPlacementMode;
 }
+
+const PLACE_ONLY_CHANGE =
+  "CHANGE: Place only the user-provided product(s) into this exact room. Keep walls, floor, ceiling, lighting, camera, and all existing furniture/decor unchanged except where a provided product replaces a similar item.";
 
 export function buildQuickRoomEditInstruction(input: QuickRoomEditInstructionInput): string {
   const preserve = buildPreserveScaffold(input.openingBoxCounts);
+  const placeOnly = input.placementMode === "placeOnly";
 
   const doorDesign = typeof input.brief.doorDesign === "string" ? input.brief.doorDesign.trim() : "";
   const changeParts = [
-    `CHANGE: Redesign this room as a photorealistic ${input.designStyleLabel} interior.`,
+    placeOnly
+      ? PLACE_ONLY_CHANGE
+      : `CHANGE: Redesign this room as a photorealistic ${input.designStyleLabel} interior.`,
     input.brief.subject?.trim() ? `Design: ${input.brief.subject.trim()}` : "",
     input.brief.arrangement?.trim() ? `Furniture arrangement: ${input.brief.arrangement.trim()}` : "",
-    doorDesign ? `Door styling: ${doorDesign}` : "",
+    !placeOnly && doorDesign ? `Door styling: ${doorDesign}` : "",
     input.editContext?.trim() ? `User adjustments: ${input.editContext.trim()}` : "",
   ].filter(Boolean);
 
@@ -77,7 +85,9 @@ export function buildQuickRoomEditInstruction(input: QuickRoomEditInstructionInp
   const productClose = input.productCloseText?.trim() ?? "";
   const appendix = input.merchantAppendix?.trim().slice(0, MERCHANT_APPENDIX_CAP) ?? "";
   const designDirection = input.brief.fullPrompt?.trim()
-    ? `Design direction: ${input.brief.fullPrompt.trim().slice(0, BRIEF_FULL_PROMPT_SLICE)}`
+    ? placeOnly
+      ? `Placement direction: ${input.brief.fullPrompt.trim().slice(0, BRIEF_FULL_PROMPT_SLICE)}`
+      : `Design direction: ${input.brief.fullPrompt.trim().slice(0, BRIEF_FULL_PROMPT_SLICE)}`
     : "";
 
   // Geometry lock, product placement mandates, and the core CHANGE lines are

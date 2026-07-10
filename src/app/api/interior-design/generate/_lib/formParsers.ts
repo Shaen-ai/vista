@@ -1,4 +1,10 @@
 import { optimizeImageBufferForAiWithBuffer } from "@/lib/optimizeImageForAi";
+import {
+  parseQuickRoomPlacementMode,
+  type QuickRoomPlacementMode,
+} from "@/lib/quickRoom/placementMode";
+
+export { parseQuickRoomPlacementMode, type QuickRoomPlacementMode };
 
 const MAX_INSPIRATION_IMAGES = 10;
 const MAX_STYLE_INSPIRATION_IMAGES = 4;

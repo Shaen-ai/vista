@@ -12,6 +12,7 @@ import {
 } from "@/lib/roomShapePolygon";
 import type { RoomPolygonEdge } from "@/lib/roomGeometryTypes";
 import type { PhotoConfirmedStructuralElement } from "@/lib/project/types";
+import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
 
 export const DESIGN_STYLES = [
   { id: "modern", label: "Modern", keywords: "clean lines, open spaces, neutral palette with bold accents, glass, steel, minimal ornament" },
@@ -714,6 +715,68 @@ export function quickRoomShowsOptionalSpatialHint(analysis: RoomAnalysis | null 
   );
 }
 
+function buildPlacementOnlyDirectorPrompt(
+  userRequest: string,
+  roomAnalysis: RoomAnalysis | null | undefined,
+  editContext: string | undefined,
+  merchantCatalogDirectorBlock: string | undefined,
+  inspirationImageCount: number,
+): string {
+  const roomContext = roomAnalysis
+    ? `\nRoom Analysis:\n- Type: ${roomAnalysis.room_type}\n- Existing furniture: ${roomAnalysis.existing_furniture.map((f) => f.name).join(", ") || "see photo"}\n- Current style: ${roomAnalysis.current_style}`
+    : "";
+
+  const editInfo = editContext ? `\n\nPrevious design context:\n${editContext}` : "";
+
+  const pinnedBlock = merchantCatalogDirectorBlock?.trim()
+    ? `\n\n${merchantCatalogDirectorBlock.trim()}\nOnly these pinned catalog products may be placed — do not add any other catalog items.`
+    : "";
+
+  const inspirationSection =
+    inspirationImageCount > 0
+      ? `\n\nUSER-PROVIDED PRODUCT IMAGES (${inspirationImageCount} attached above):
+The user uploaded photos of specific products to place in this room. These exact images are handed to the image generator — never substitute them.
+1. Output "product_descriptions" — one entry per uploaded image, in order.
+2. In "subject" and "arrangement", describe ONLY where and how to place these products.
+3. Do NOT add furniture, decor, or finishes beyond what the user provided.
+4. Leave "required_slots" empty — do not request extra catalog items.`
+      : "";
+
+  return `You are a furniture placement specialist. The user wants to add specific products to their existing room photo WITHOUT redesigning the room.
+
+PLACEMENT-ONLY MODE (absolute):
+- Keep walls, floor, ceiling, lighting, camera angle, and ALL existing furniture/decor exactly as photographed.
+- ONLY place the user-provided product(s) — uploaded photos and/or catalog pins.
+- Do NOT change wall colors, flooring, curtains, lighting fixtures, or add new decor.
+- Do NOT add furniture beyond what the user provided.
+- If a provided product should replace a similar existing piece (e.g. new sofa replaces old sofa), describe that replacement in arrangement only.
+- NEVER describe room shape, window count/positions, door count, ceiling type, or camera angle — the photo defines all structure.
+${roomContext}${editInfo}${pinnedBlock}${inspirationSection}
+
+User request: "${userRequest}"
+
+Output formatting: return a single JSON object only. Use strict JSON: double-quoted keys and string values, escape internal double quotes as \\", no trailing commas, no comments, no markdown fences around the JSON.
+
+Respond ONLY with valid JSON:
+{
+  "room_type": "string",
+  "camera_angle": "Reference photo determines angle",
+  "subject": "string (ONLY the provided products being placed — material, color, shape)",
+  "arrangement": "string (where each provided product goes; replacement vs addition if applicable)",
+  "context": "string (unchanged room atmosphere — do not redesign)",
+  "composition": "Reference photo determines angle and framing",
+  "style": "string (match the existing room — do not impose a new style)",
+  "door_design": "",
+  "design_intent": "string (single paragraph: placement plan only — no surface redesign)",
+  "required_slots": [],
+  "constraints": {},
+  ${inspirationImageCount > 0
+    ? `"product_descriptions": [{ "upload_index": 0, "family": "furniture|lighting|decor", "subtype": "sofa|lamp|etc", "description": "detailed description of the uploaded product" }],`
+    : ""}
+  "fullPrompt": "string (MUST start with 'Place the user-provided products in this room:' — describe placement only; never redesign walls, floor, ceiling, or lighting)"
+}`;
+}
+
 export function buildCreativeDirectorPrompt(
   userRequest: string,
   styleId: DesignStyleId,
@@ -721,9 +784,25 @@ export function buildCreativeDirectorPrompt(
   editContext?: string,
   hasReferenceImage?: boolean,
   merchantCatalogDirectorBlock?: string,
-  options?: { vectorCatalogMode?: boolean; freeRender?: boolean; inspirationImageCount?: number; styleInspirationCount?: number },
+  options?: {
+    vectorCatalogMode?: boolean;
+    freeRender?: boolean;
+    inspirationImageCount?: number;
+    styleInspirationCount?: number;
+    placementMode?: QuickRoomPlacementMode;
+  },
 ): string {
   const style = DESIGN_STYLES.find((s) => s.id === styleId) ?? DESIGN_STYLES[0];
+
+  if (options?.placementMode === "placeOnly") {
+    return buildPlacementOnlyDirectorPrompt(
+      userRequest,
+      roomAnalysis,
+      editContext,
+      merchantCatalogDirectorBlock,
+      options.inspirationImageCount ?? 0,
+    );
+  }
 
   const roomContext = roomAnalysis
     ? `\nRoom Analysis:\n- Type: ${roomAnalysis.room_type} (${roomAnalysis.room_shape})\n- Dimensions: ${formatRoomDimensionsForPrompt(roomAnalysis.room_shape, roomAnalysis.estimated_dimensions, roomAnalysis.polygon_edges)}\n- STRUCTURAL LOCK — Windows: EXACTLY ${roomAnalysis.window_count} (${roomAnalysis.window_positions.join("; ") || "positions unspecified"}) — downstream image generation MUST preserve this count\n- STRUCTURAL LOCK — Doors / passages: EXACTLY ${roomAnalysis.door_count} (${roomAnalysis.door_positions.join("; ") || "positions unspecified"})\n- Existing furniture: ${roomAnalysis.existing_furniture.map((f) => f.name).join(", ")}\n- Architectural features: ${roomAnalysis.architectural_features.join(", ")}\n- Lighting: ${roomAnalysis.lighting_sources.join(", ")}\n- Current style: ${roomAnalysis.current_style}\n- Color palette: ${roomAnalysis.color_palette.join(", ")}${roomAnalysis.has_staircase ? `\n- Staircase: ${roomAnalysis.staircase_description || "present"}` : ""}${roomAnalysis.has_floor_opening ? `\n- Floor void / cutout (must not be covered by flooring in the image): ${roomAnalysis.floor_opening_description || "see photo"}` : ""}`
