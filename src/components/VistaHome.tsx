@@ -66,7 +66,6 @@ const StructuralBoundaryCanvas = dynamic(
 );
 import { useProjectPersistence } from "@/hooks/useProjectPersistence";
 import { getAuthToken } from "@/lib/authApi";
-import { ProjectTimeline } from "@/components/ProjectTimeline";
 import { useProjectSessionRestore } from "@/hooks/useProjectSessionRestore";
 import { subscribeToProjectSession } from "@/app/store";
 import {
@@ -3111,12 +3110,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                   <X size={18} aria-hidden />
                 </button>
               </div>
-            </div>
-          )}
-          {/* Project timeline (saved projects) */}
-          {currentProjectDbId && !isMobile && (
-            <div className="border-b border-[var(--border)] max-h-[40%] overflow-y-auto">
-              <ProjectTimeline />
             </div>
           )}
           {/* Search input */}
