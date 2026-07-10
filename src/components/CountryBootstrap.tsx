@@ -5,12 +5,31 @@ import { useConsumerDesignStore } from "@/app/store";
 import { getPublicApiUrl } from "@/lib/publicEnv";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
 import { hasPersistedVistaLocale } from "@/i18n/vistaLocale";
+import {
+  buildTawkEmbedScript,
+  TAWK_WIDGET_ID_ARMENIAN,
+  TAWK_WIDGET_ID_ENGLISH,
+} from "@/lib/tawkTo";
 
 type DetectCountryResponse = {
   data?: {
     country_code?: string;
   };
 };
+
+let tawkLoaded = false;
+
+function loadTawkWidget(countryCode: string) {
+  if (process.env.NODE_ENV !== "production") return;
+  if (tawkLoaded) return;
+  tawkLoaded = true;
+
+  const widgetId = countryCode === "AM" ? TAWK_WIDGET_ID_ARMENIAN : TAWK_WIDGET_ID_ENGLISH;
+  const script = document.createElement("script");
+  script.id = "tawk-to";
+  script.text = buildTawkEmbedScript(widgetId);
+  document.body.appendChild(script);
+}
 
 export function CountryBootstrap() {
   const setSelectedCountry = useConsumerDesignStore((s) => s.setSelectedCountry);
@@ -35,10 +54,13 @@ export function CountryBootstrap() {
         if (!hasPersistedVistaLocale()) {
           setLocale(code === "AM" ? "hy" : "en");
         }
+        loadTawkWidget(code);
       })
       .catch(() => {
         if (cancelled) return;
         setCountryDetected(false);
+        // Detection failed — fall back to the app-wide English default.
+        loadTawkWidget("EN");
       });
 
     return () => {

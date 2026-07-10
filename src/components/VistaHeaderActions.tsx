@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Folder, Menu, Moon, Sun, X } from "lucide-react";
 import { VistaAuthMenu } from "@/components/VistaAuthMenu";
+import { VistaInviteFriends } from "@/components/VistaInviteFriends";
 import { FillBalanceButton } from "@/components/FillBalanceButton";
 import { DevSpendBadge } from "@/components/DevSpendBadge";
 import { LanguageSwitcher } from "@/i18n/LanguageSwitcher";
@@ -80,6 +81,7 @@ export function VistaHeaderActions({
           </button>
         )}
         <VistaAuthMenu />
+        <VistaInviteFriends compact />
         <DevSpendBadge />
         <LanguageSwitcher />
         {themeToggle}
@@ -139,6 +141,8 @@ export function VistaHeaderActions({
                     <VistaAuthMenu layout="sheet" onNavigate={closeMenu} />
                   </div>
                 </div>
+
+                <VistaInviteFriends layout="sheet" compact />
 
                 <div className="cd-header-sheet-section">
                   <span className="cd-header-sheet-label">{t("common.wallet")}</span>

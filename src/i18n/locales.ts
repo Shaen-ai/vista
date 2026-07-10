@@ -2,7 +2,7 @@ export const VISTA_LOCALES = ["hy", "en", "ru"] as const;
 
 export type VistaLocale = (typeof VISTA_LOCALES)[number];
 
-export const DEFAULT_LOCALE: VistaLocale = "hy";
+export const DEFAULT_LOCALE: VistaLocale = "en";
 
 export const LOCALE_LABELS: Record<VistaLocale, string> = {
   hy: "Հայերեն",

@@ -98,6 +98,13 @@
     "createAccount": "Create account",
     "signIn": "Sign in"
   },
+  "referral": {
+    "yourLink": "Your invite link",
+    "shareToEarn": "Share this link — earn 20 tokens each time a friend joins",
+    "earnedOfCap": "{earned} / {cap} tokens earned",
+    "copyLink": "Copy link",
+    "loadError": "Couldn't load your invite link"
+  },
   "components": {
     "cameraTitle": "Take a photo",
     "closeCamera": "Close camera",

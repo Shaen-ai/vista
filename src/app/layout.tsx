@@ -55,18 +55,6 @@ const VISTA_THEME_BOOT_SCRIPT = `(function(){try{var k='vista-ui-theme';var c='$
 
 const VISTA_LOCALE_BOOT_SCRIPT = buildVistaLocaleBootScript();
 
-const TAWK_TO_SCRIPT = `
-var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
-(function(){
-var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
-s1.async=true;
-s1.src='https://embed.tawk.to/6a0cb4984df5121c33c41874/1jp0q2t5g';
-s1.charset='UTF-8';
-s1.setAttribute('crossorigin','*');
-s0.parentNode.insertBefore(s1,s0);
-})();
-`;
-
 export default async function RootLayout({
   children,
 }: Readonly<{
@@ -92,11 +80,6 @@ export default async function RootLayout({
         <Script id="vista-theme-boot" strategy="beforeInteractive">
           {VISTA_THEME_BOOT_SCRIPT}
         </Script>
-        {process.env.NODE_ENV === "production" ? (
-          <Script id="tawk-to" strategy="afterInteractive">
-            {TAWK_TO_SCRIPT}
-          </Script>
-        ) : null}
         <PostHogProvider>
           <VistaLocaleProvider initialLocale={ssrLocale}>
             <VistaThemeProvider initialTheme={ssrTheme}>
