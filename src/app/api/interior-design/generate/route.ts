@@ -22,6 +22,7 @@ import {
 import { buildGeminiProductVisualParts } from "@/lib/buildGeminiProductVisualParts";
 import { runWithLogContext } from "@/lib/logSink";
 import { logClaudeRequest, logClaudeResponse } from "@/lib/logClaudeRequest";
+import { ANTHROPIC_BRIEF_MODEL } from "@/lib/anthropicModels";
 import {
   buildQuickDesignScrapedAllowlistIds,
   isArmeniaLocalScrapedExclusive,
@@ -410,7 +411,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
 
     logClaudeRequest({
       label: "design-brief",
-      model: "claude-opus-4-8",
+      model: ANTHROPIC_BRIEF_MODEL,
       maxTokens: scrapedInventoryExclusive ? 6144 : 8192,
       messages: claudeContent as unknown as Anthropic.ContentBlockParam[],
       context: {
@@ -425,7 +426,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
     const claudeResponse = await withRetry(
       () =>
         claudeClient.messages.create({
-          model: "claude-opus-4-8",
+          model: ANTHROPIC_BRIEF_MODEL,
           max_tokens: scrapedInventoryExclusive ? 6144 : 8192,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           messages: [{ role: "user", content: claudeContent as any }],

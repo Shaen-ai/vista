@@ -8,6 +8,11 @@ import {
   reportOverloadedIncident,
 } from "@/lib/aiIncident";
 import { optimizeImageBufferForAiWithBuffer } from "@/lib/optimizeImageForAi";
+import {
+  buildRoomGeometryCacheKey,
+  readPhotoCache,
+  writePhotoCache,
+} from "@/lib/photoAnalysisCache";
 import { StepTimer } from "@/lib/generationDebug";
 import { PUBLIC_AI_SERVICE_UNAVAILABLE } from "@/lib/tunzoneAi";
 
@@ -50,8 +55,23 @@ export async function POST(request: NextRequest) {
     const optimized = await optimizeImageBufferForAiWithBuffer(Buffer.from(bytes));
     timer.mark("optimize_image", { bytes: optimized.byteLength });
 
+    const cacheKey = buildRoomGeometryCacheKey(optimized.buffer);
+    const cachedGeometry = readPhotoCache<Awaited<ReturnType<typeof extractRoomGeometry>>>(cacheKey);
+    if (cachedGeometry) {
+      return NextResponse.json({
+        data: cachedGeometry,
+        cached: true,
+        debug: timer.finish("room-geometry", {
+          ok: true,
+          confidence: cachedGeometry.confidence,
+          cached: true,
+        }),
+      });
+    }
+
     const data = await extractRoomGeometry(optimized.base64, "image/jpeg");
     timer.mark("extract_geometry", { confidence: data.confidence });
+    writePhotoCache(cacheKey, data);
 
     if (data.confidence === "low") {
       console.warn("[roomGeometry] Low confidence from extraction.");

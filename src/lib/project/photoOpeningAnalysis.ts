@@ -9,6 +9,7 @@ import {
 import { withRetry } from "@/lib/aiRetry";
 import { extractFirstJsonObject } from "@/lib/extractFirstJsonObject";
 import { logClaudeRequest, logClaudeResponse } from "@/lib/logClaudeRequest";
+import { ANTHROPIC_EXTRACT_MODEL } from "@/lib/anthropicModels";
 import { optimizeImageBufferForAiWithBuffer } from "@/lib/optimizeImageForAi";
 import { pipelineLog } from "@/lib/pipelineLog";
 import { getAnthropicApiKey } from "@/lib/serverAiKeys";
@@ -57,7 +58,7 @@ export async function analyzePhotoOpenings(opts: {
 
   logClaudeRequest({
     label: "project-photo-opening-analysis",
-    model: "claude-opus-4-8",
+    model: ANTHROPIC_EXTRACT_MODEL,
     maxTokens: 2048,
     messages: content,
     context: {
@@ -71,7 +72,7 @@ export async function analyzePhotoOpenings(opts: {
     const response = await withRetry(
       () =>
         client.messages.create({
-          model: "claude-opus-4-8",
+          model: ANTHROPIC_EXTRACT_MODEL,
           max_tokens: 2048,
           messages: [{ role: "user", content }],
         }),

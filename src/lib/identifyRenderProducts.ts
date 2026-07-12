@@ -6,6 +6,7 @@ import { withRetry } from "@/lib/aiRetry";
 import { getAnthropicApiKey } from "@/lib/serverAiKeys";
 import { debugIngest } from "@/lib/debugIngest";
 import { logClaudeRequest, logClaudeResponse } from "@/lib/logClaudeRequest";
+import { ANTHROPIC_EXTRACT_MODEL } from "@/lib/anthropicModels";
 import {
   buildVisionCandidateMpKeys,
   dedupeSingletonCatalogIds,
@@ -195,7 +196,7 @@ export async function identifyCatalogProductsInRender(opts: {
 
     logClaudeRequest({
       label: "render-product-identification",
-      model: "claude-opus-4-8",
+      model: ANTHROPIC_EXTRACT_MODEL,
       maxTokens: 2048,
       messages: content as Anthropic.ContentBlockParam[],
       context: { candidateCount: opts.candidateMpKeys.length, pinned: opts.pinnedMpKeys },
@@ -204,7 +205,7 @@ export async function identifyCatalogProductsInRender(opts: {
     const response = await withRetry(
       () =>
         client.messages.create({
-          model: "claude-opus-4-8",
+          model: ANTHROPIC_EXTRACT_MODEL,
           max_tokens: 2048,
           messages: [{ role: "user", content }],
         }),

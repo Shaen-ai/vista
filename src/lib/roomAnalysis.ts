@@ -13,6 +13,7 @@ import { withRetry } from "@/lib/aiRetry";
 import type { RoomGeometry } from "@/lib/roomGeometryTypes";
 import { formatPolygonEdgesForPrompt, formatRoomDimensionsForPrompt } from "@/lib/roomShapePolygon";
 import { logClaudeRequest, logClaudeResponse } from "@/lib/logClaudeRequest";
+import { resolveGeometryModel } from "@/lib/anthropicModels";
 import { RENDER_QUALITY_DIRECTIVE } from "@/lib/renderQualityDirective";
 import {
   buildDoorDesignPromptBlock,
@@ -48,8 +49,6 @@ export type {
   RoomPolygonEdge,
   RoomGeometry,
 } from "@/lib/roomGeometryTypes";
-
-const DEFAULT_GEOMETRY_MODEL = "claude-opus-4-8";
 
 export const GEOMETRY_EXTRACTOR_SYSTEM_PROMPT = `You are a room geometry extractor. Analyze the room photo and return ONLY valid JSON — no markdown, no explanation, no backticks. Extract structural facts only. Use this exact schema:
 {
@@ -149,10 +148,7 @@ export async function extractRoomGeometry(
     throw new Error("Anthropic API key is not configured (ANTHROPIC_API_KEY).");
   }
 
-  const model =
-    options?.model ||
-    process.env.ANTHROPIC_ROOM_GEOMETRY_MODEL?.trim() ||
-    DEFAULT_GEOMETRY_MODEL;
+  const model = resolveGeometryModel(options?.model);
 
   const client = new Anthropic({ apiKey });
   const mediaType = normalizeImageMediaType(mimeType);

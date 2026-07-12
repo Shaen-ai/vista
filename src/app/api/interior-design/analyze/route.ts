@@ -13,6 +13,12 @@ import { extractFirstJsonObject } from "@/lib/extractFirstJsonObject";
 import { normalizeVistaLocale } from "@/i18n/locales";
 import { optimizeImageBufferForAiWithBuffer } from "@/lib/optimizeImageForAi";
 import { logClaudeRequest, logClaudeResponse } from "@/lib/logClaudeRequest";
+import { ANTHROPIC_EXTRACT_MODEL } from "@/lib/anthropicModels";
+import {
+  buildRoomAnalysisCacheKey,
+  readPhotoCache,
+  writePhotoCache,
+} from "@/lib/photoAnalysisCache";
 import { PUBLIC_AI_SERVICE_UNAVAILABLE } from "@/lib/tunzoneAi";
 
 export const maxDuration = 120;
@@ -45,9 +51,11 @@ export async function POST(request: NextRequest) {
     }
 
     const imageBlocks: Anthropic.ImageBlockParam[] = [];
+    const optimizedBuffers: Buffer[] = [];
     for (const img of roomImages) {
       const bytes = await img.arrayBuffer();
       const optimized = await optimizeImageBufferForAiWithBuffer(Buffer.from(bytes));
+      optimizedBuffers.push(optimized.buffer);
       imageBlocks.push({
         type: "image",
         source: { type: "base64", media_type: "image/jpeg", data: optimized.base64 },
@@ -56,6 +64,14 @@ export async function POST(request: NextRequest) {
 
     const isMulti = imageBlocks.length > 1;
     const locale = normalizeVistaLocale(formData.get("locale")?.toString());
+    const cacheKey = buildRoomAnalysisCacheKey(optimizedBuffers, locale);
+    const cachedAnalysis = readPhotoCache<Awaited<ReturnType<typeof normalizeRoomAnalysisOpenings>>>(
+      cacheKey,
+    );
+    if (cachedAnalysis) {
+      return NextResponse.json({ data: cachedAnalysis, cached: true });
+    }
+
     const client = new Anthropic({ apiKey: anthropicKey });
 
     const content: Anthropic.ContentBlockParam[] = [
@@ -68,7 +84,7 @@ export async function POST(request: NextRequest) {
 
     logClaudeRequest({
       label: "room-analysis",
-      model: "claude-opus-4-8",
+      model: ANTHROPIC_EXTRACT_MODEL,
       maxTokens: 2048,
       messages: content,
       context: { isMulti, locale, imageCount: imageBlocks.length },
@@ -77,7 +93,7 @@ export async function POST(request: NextRequest) {
     const response = await withRetry(
       () =>
         client.messages.create({
-          model: "claude-opus-4-8",
+          model: ANTHROPIC_EXTRACT_MODEL,
           max_tokens: 2048,
           messages: [{ role: "user", content }],
         }),
@@ -116,6 +132,8 @@ export async function POST(request: NextRequest) {
         door_boxes: analysis?.door_boxes,
       },
     });
+
+    writePhotoCache(cacheKey, analysis);
 
     return NextResponse.json({ data: analysis });
   } catch (error: unknown) {

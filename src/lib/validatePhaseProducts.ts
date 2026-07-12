@@ -6,6 +6,7 @@ import { fetchProductImagePartsForVision } from "@/lib/consumerCatalog";
 import { withRetry } from "@/lib/aiRetry";
 import { getAnthropicApiKey } from "@/lib/serverAiKeys";
 import { logClaudeRequest, logClaudeResponse } from "@/lib/logClaudeRequest";
+import { ANTHROPIC_EXTRACT_MODEL } from "@/lib/anthropicModels";
 
 type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
@@ -95,7 +96,7 @@ Only use IDs from the expected products list. Every expected ID must appear in e
   try {
     logClaudeRequest({
       label: "phase-product-validation",
-      model: "claude-opus-4-8",
+      model: ANTHROPIC_EXTRACT_MODEL,
       maxTokens: 1024,
       messages: content as Anthropic.ContentBlockParam[],
       context: { expectedProductIds: opts.expectedProductIds },
@@ -104,7 +105,7 @@ Only use IDs from the expected products list. Every expected ID must appear in e
     const response = await withRetry(
       () =>
         client.messages.create({
-          model: "claude-opus-4-8",
+          model: ANTHROPIC_EXTRACT_MODEL,
           max_tokens: 1024,
           messages: [{ role: "user", content }],
         }),
