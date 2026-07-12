@@ -1670,8 +1670,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   useEffect(() => {
     if (vistaMode !== "quick") return;
     if (!roomImageBase64 || !roomImageMimeType) return;
+    if (quickRoomAnalysis) return;
     void runQuickRoomAnalyze();
-  }, [vistaMode, roomImageBase64, roomImageMimeType, quickAnalyzeNonce, runQuickRoomAnalyze]);
+  }, [vistaMode, roomImageBase64, roomImageMimeType, quickRoomAnalysis, quickAnalyzeNonce, runQuickRoomAnalyze]);
 
   const amLocalExclusive = isArmeniaLocalScrapedExclusive(selectedCountry, searchMode);
 
@@ -3410,7 +3411,10 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     </p>
                     <button
                       type="button"
-                      onClick={() => setQuickAnalyzeNonce((n) => n + 1)}
+                      onClick={() => {
+                        setQuickRoomAnalysis(null);
+                        setQuickAnalyzeNonce((n) => n + 1);
+                      }}
                       className="self-start text-sm font-semibold text-[var(--primary)] underline-offset-2 hover:underline cursor-pointer"
                     >
                       {t("page.retryScan")}

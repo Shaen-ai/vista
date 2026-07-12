@@ -216,18 +216,18 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
   store.setVistaMode("quick");
   store.setSelectedStyle(project.style ?? "modern");
 
+  if (project.roomImageUrl) {
+    const roomImg = await fetchUrlAsBase64(project.roomImageUrl);
+    if (roomImg) {
+      store.hydrateRoomImage(roomImg.base64, roomImg.mimeType);
+    }
+  }
+
   if (project.roomAnalysis) {
     store.setQuickRoomAnalysis(project.roomAnalysis);
   }
   if (project.roomGeometry) {
     store.setLastRoomGeometry(project.roomGeometry, false);
-  }
-
-  if (project.roomImageUrl) {
-    const roomImg = await fetchUrlAsBase64(project.roomImageUrl);
-    if (roomImg) {
-      store.setRoomImage(roomImg.base64, roomImg.mimeType);
-    }
   }
 
   const versions = project.versions;
@@ -257,6 +257,11 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
       });
     }
     store.setDesignHistory(historyEntries);
+  } else {
+    store.setGeneratedImage(null, null);
+    store.setDesignBrief(null);
+    store.setProductLinks([]);
+    store.setDesignHistory([]);
   }
 
   const lastUserMsg = [...project.messages].reverse().find(

@@ -457,6 +457,8 @@ interface ConsumerDesignState {
   addProduct: (product: MarketplaceProduct) => void;
   removeProduct: (id: number) => void;
   setRoomImage: (base64: string | null, mimeType: string | null) => void;
+  /** Restore saved room photo without clearing analysis/geometry (Quick Room reopen). */
+  hydrateRoomImage: (base64: string, mimeType: string) => void;
   addQuickRoomExtraPhoto: (base64: string, mimeType: string) => void;
   removeQuickRoomExtraPhoto: (id: string) => void;
   setQuickRoomAnalysis: (analysis: RoomAnalysis | null) => void;
@@ -664,6 +666,12 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
       quickRoomFactsConfirmed: false,
       lastRoomGeometry: null,
       lastGeometryExtractionFailed: false,
+    }),
+
+  hydrateRoomImage: (base64, mimeType) =>
+    set({
+      roomImageBase64: base64,
+      roomImageMimeType: mimeType,
     }),
 
   addQuickRoomExtraPhoto: (base64, mimeType) =>
