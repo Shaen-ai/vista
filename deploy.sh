@@ -86,6 +86,7 @@ SYNC_KEYS=(
   VISTA_FAL_STYLE_LORA_SCALE
   VISTA_FAL_MASK_INVERT
   VISTA_FAL_VALIDATE
+  VISTA_EDIT_RESOLUTION
 )
 echo "==> Syncing server-side keys to remote .env.local ..."
 $SSH "$SERVER" "touch '$REMOTE_DIR/.env.local'"

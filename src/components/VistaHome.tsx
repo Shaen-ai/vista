@@ -66,6 +66,7 @@ const StructuralBoundaryCanvas = dynamic(
 );
 import { useProjectPersistence } from "@/hooks/useProjectPersistence";
 import { getAuthToken } from "@/lib/authApi";
+import { DEFAULT_QUICK_ROOM_PROMPT } from "@/lib/quickRoomDefaultPrompt";
 import { useProjectSessionRestore } from "@/hooks/useProjectSessionRestore";
 import { subscribeToProjectSession } from "@/app/store";
 import {
@@ -1746,7 +1747,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
   const generateFormReady =
     !!roomImageBase64 &&
-    !!textPrompt.trim() &&
     !isGenerating &&
     quickRoomSpatialReady &&
     (placementMode !== "placeOnly" || hasProvidedProducts);
@@ -1769,7 +1769,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   }) => {
     const tokenAction: TokenAction = opts?.tokenAction ?? "generate";
     const actionCost = TOKEN_COSTS[tokenAction];
-    const prompt = opts?.promptOverride ?? textPrompt.trim();
+    const prompt = opts?.promptOverride ?? (textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT);
     const imgB64 = opts?.attachmentOverride?.base64 ?? roomImageBase64;
     const imgMime = opts?.attachmentOverride?.mimeType ?? roomImageMimeType;
     if (!imgB64 || !prompt || isGenerating) return;
@@ -2110,7 +2110,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   // --- Phased design handlers ---
 
   const handleStartPhasedDesign = useCallback(async () => {
-    if (!roomImageBase64 || !roomImageMimeType || !textPrompt.trim() || isGenerating) return;
+    if (!roomImageBase64 || !roomImageMimeType || isGenerating) return;
     track("design_generate_started", { mode: "phased", phase: "base" });
     startPhasedDesign();
     setIsGenerating(true);
@@ -2124,7 +2124,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
       const buildForm = () => {
         const form = new FormData();
-        form.set("textPrompt", textPrompt.trim());
+        form.set("textPrompt", textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT);
         form.set("style", selectedStyle);
         form.set("countryCode", selectedCountry);
         form.set("searchMode", searchMode);
@@ -2336,7 +2336,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
       const { authHeaders } = authContextForApi();
       const form = new FormData();
-      form.set("textPrompt", textPrompt.trim());
+      form.set("textPrompt", textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT);
       form.set("style", selectedStyle);
       form.set("countryCode", selectedCountry);
       form.set("searchMode", searchMode);
@@ -2480,7 +2480,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       }
 
       const form = new FormData();
-      form.set("textPrompt", textPrompt.trim());
+      form.set("textPrompt", textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT);
       form.set("style", selectedStyle);
       form.set("countryCode", selectedCountry);
       form.set("searchMode", searchMode);

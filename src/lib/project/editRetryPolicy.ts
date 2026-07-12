@@ -17,6 +17,12 @@ const PLACEMENT_FAILURE_TYPES = new Set([
   "wall_clip",
 ]);
 
+/** Design failures that still warrant a corrective re-render (not pure decor). */
+const RETRY_WORTHY_DESIGN_FAILURE_TYPES = new Set([
+  "no_design",
+  "furniture_inconsistent",
+]);
+
 export const STRUCTURAL_RETRY_ESCALATION_TYPES = new Set([
   "geometry_drift",
   "added_opening",
@@ -56,5 +62,8 @@ export function pickBestEditAttempt(records: EditAttemptRecord[]): EditAttemptRe
 }
 
 export function resolveEditRetryLimit(failureTypes: string[]): number {
-  return hasStructuralFailure(failureTypes) ? 3 : 2;
+  if (hasStructuralFailure(failureTypes)) return 3;
+  if (failureTypes.some((t) => PLACEMENT_FAILURE_TYPES.has(t))) return 2;
+  if (failureTypes.some((t) => RETRY_WORTHY_DESIGN_FAILURE_TYPES.has(t))) return 2;
+  return 1;
 }

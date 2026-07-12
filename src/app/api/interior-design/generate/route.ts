@@ -11,6 +11,7 @@ import {
   type DesignBrief,
 } from "@/lib/interiorDesignPrompts";
 import { annotateOpenings } from "@/lib/annotateOpenings";
+import { DEFAULT_QUICK_ROOM_PROMPT } from "@/lib/quickRoomDefaultPrompt";
 import type { RoomGeometry } from "@/lib/roomGeometryTypes";
 import {
   buildConsumerDesignCatalogContext,
@@ -130,7 +131,8 @@ async function handleQuickRoomPost(request: NextRequest) {
       return NextResponse.json(result.body, { status: result.status });
     }
 
-    const textPrompt = (formData.get("textPrompt") as string) || "";
+    const textPrompt =
+      ((formData.get("textPrompt") as string) || "").trim() || DEFAULT_QUICK_ROOM_PROMPT;
     const editContext = String(formData.get("editContext") ?? "").trim();
     const styleId = (formData.get("style") as DesignStyleId) || "modern";
     const roomImage = formData.get("roomImage") as File | null;
@@ -212,10 +214,6 @@ async function handleQuickRoomPost(request: NextRequest) {
       if (mergedAllowlistIds.length > 0) {
         marketplaceNumericIds = mergedAllowlistIds;
       }
-    }
-
-    if (!textPrompt.trim()) {
-      return NextResponse.json({ error: "Text prompt is required." }, { status: 400 });
     }
 
     if (!anthropicKey || !googleKey) {

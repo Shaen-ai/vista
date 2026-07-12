@@ -21,11 +21,14 @@ function record(
   };
 }
 
-test("structural failures get 3 retries, others 2", () => {
+test("tiered retry limits: structural 3, placement/design 2, cosmetic 1", () => {
   assert.equal(resolveEditRetryLimit(["geometry_drift"]), 3);
   assert.equal(resolveEditRetryLimit(["hero_copy"]), 3);
-  assert.equal(resolveEditRetryLimit(["decor_inconsistent"]), 2);
-  assert.equal(resolveEditRetryLimit([]), 2);
+  assert.equal(resolveEditRetryLimit(["object_overlap"]), 2);
+  assert.equal(resolveEditRetryLimit(["furniture_inconsistent"]), 2);
+  assert.equal(resolveEditRetryLimit(["no_design"]), 2);
+  assert.equal(resolveEditRetryLimit(["decor_inconsistent"]), 1);
+  assert.equal(resolveEditRetryLimit([]), 1);
 });
 
 test("hasStructuralFailure recognizes the structural set only", () => {

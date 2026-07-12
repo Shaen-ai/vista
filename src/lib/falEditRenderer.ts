@@ -47,21 +47,28 @@ export async function renderEditStaging(input: EditStagingInput): Promise<EditSt
   const stage = input.stage ?? "master";
   const start = Date.now();
 
-  const imageUrls: string[] = [];
+  const uploadTasks: Array<{ index: number; buf: Buffer; mime: string }> = [];
   let firstImageBuf: Buffer | null = null;
   for (let i = 0; i < input.imageBase64List.length; i++) {
     const b64 = input.imageBase64List[i]?.trim();
     if (!b64) continue;
     const buf = Buffer.from(b64, "base64");
     if (!firstImageBuf) firstImageBuf = buf;
-    const mime = input.imageMimeList?.[i] || "image/jpeg";
-    const url = await uploadPublicImage(buf, mime, {
-      sessionId: input.sessionId,
-      type: "original",
-      label: `${label}-input-${i}`,
-    });
-    imageUrls.push(url);
+    uploadTasks.push({ index: i, buf, mime: input.imageMimeList?.[i] || "image/jpeg" });
   }
+
+  const uploaded = await Promise.all(
+    uploadTasks.map(async ({ index, buf, mime }) => ({
+      index,
+      url: await uploadPublicImage(buf, mime, {
+        sessionId: input.sessionId,
+        type: "original",
+        label: `${label}-input-${index}`,
+      }),
+    })),
+  );
+  uploaded.sort((a, b) => a.index - b.index);
+  const imageUrls = uploaded.map((u) => u.url);
 
   if (imageUrls.length === 0 || !firstImageBuf) {
     throw new Error("renderEditStaging: no input images");
