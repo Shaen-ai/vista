@@ -35,9 +35,9 @@ export interface EditStagingResult {
 }
 
 function resolveEditResolution(): EditResolution {
-  const raw = (process.env.VISTA_EDIT_RESOLUTION || "2K").trim().toUpperCase();
-  if (raw === "1K" || raw === "4K") return raw;
-  return "2K";
+  const raw = (process.env.VISTA_EDIT_RESOLUTION || "4K").trim().toUpperCase();
+  if (raw === "1K" || raw === "2K") return raw;
+  return "4K";
 }
 
 export async function renderEditStaging(input: EditStagingInput): Promise<EditStagingResult> {
@@ -125,7 +125,7 @@ export async function renderEditStaging(input: EditStagingInput): Promise<EditSt
                 resolution,
                 ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
                 num_images: 1,
-                output_format: "jpeg",
+                output_format: "png",
               },
               logs: false,
             }),
@@ -171,12 +171,8 @@ export async function renderEditStaging(input: EditStagingInput): Promise<EditSt
 
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch edit result: HTTP ${res.status}`);
-  let buf = Buffer.from(await res.arrayBuffer());
-  let mimeType = res.headers.get("content-type") || "image/jpeg";
-  if (!mimeType.includes("jpeg") && !mimeType.includes("jpg")) {
-    buf = Buffer.from(await sharp(buf).jpeg({ quality: 90 }).toBuffer());
-    mimeType = "image/jpeg";
-  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  const mimeType = res.headers.get("content-type") || "image/png";
 
   const meta = await sharp(buf).metadata();
   const ms = Date.now() - start;

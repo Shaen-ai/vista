@@ -167,7 +167,7 @@ export async function runQuickRoomEditPipeline(
     hasStyleInspiration: !!input.styleInspiration,
     runShell: shapeConfig.runShell,
   });
-  const editResolution = (process.env.VISTA_EDIT_RESOLUTION || "2K").trim().toUpperCase();
+  const editResolution = (process.env.VISTA_EDIT_RESOLUTION || "4K").trim().toUpperCase();
 
   logQuickRoomFalStep({
     step: "banana",
@@ -175,10 +175,10 @@ export async function runQuickRoomEditPipeline(
     endpoint: QUICK_ROOM_FAL_BANANA_ENDPOINT,
     prompt,
     falParams: {
-      resolution: editResolution === "1K" || editResolution === "4K" ? editResolution : "2K",
+      resolution: editResolution === "1K" || editResolution === "2K" ? editResolution : "4K",
       aspect_ratio: shapeConfig.runShell ? "auto (from staged shell)" : "auto (from original photo)",
       num_images: 1,
-      output_format: "jpeg",
+      output_format: "png",
       shapeCreativity: shapeConfig.level,
       runShell: shapeConfig.runShell,
       loraScale: shapeConfig.loraScale,

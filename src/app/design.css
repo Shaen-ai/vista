@@ -547,9 +547,9 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
   font-size: 0.8125rem;
   color: var(--muted-foreground);
   animation: cd-gen-step-in 0.5s ease-out both;
-  padding: 0.2rem 0.5rem 0.2rem 0;
+  padding: 0.35rem 0.5rem;
   border-radius: 0.5rem;
-  overflow: hidden;
+  overflow: visible;
 }
 .cd-gen-loader-step--active {
   color: var(--foreground);
@@ -559,6 +559,7 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
   content: "";
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   background: linear-gradient(
     90deg,
     transparent,
@@ -1918,6 +1919,14 @@ html[data-vista-theme="light"] .cd-page .cd-mobile-tab-bar {
   body #tawk-bubble-container,
   body .tawk-min-container {
     bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  html.tawk-chat-maximized #tawk-max-container,
+  html.tawk-chat-maximized iframe[title="chat widget"] {
+    height: var(--tawk-vv-height, 100dvh) !important;
+    max-height: var(--tawk-vv-height, 100dvh) !important;
+    top: var(--tawk-vv-offset-top, 0px) !important;
+    bottom: auto !important;
   }
 }
 
