@@ -88,6 +88,13 @@
     "generateCost": "— {cost} tokens",
     "editCostTitle": "Edit with chat — {cost} tokens"
   },
+  "lowBalance": {
+    "topUpTitle": "Low balance",
+    "topUpDescription": "Top up your balance for uninterrupted generation.",
+    "currentBalance": "Current balance: {balance} tokens",
+    "guestInviteBody": "Sign in to get your personal invite link and earn 20 tokens for each friend who joins.",
+    "signInToInvite": "Sign in to invite friends"
+  },
   "invite": {
     "invalidTitle": "Invalid invite link",
     "invalidDescription": "This referral code is not valid. You can still sign up and try Vista.",

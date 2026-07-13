@@ -5,6 +5,7 @@ import {
   SUPPORTED_COUNTRIES_FALLBACK,
 } from "@/lib/supportedCountriesFallback";
 import { resolveDesignMode } from "@/lib/designModeConfig";
+import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
 import type {
   FloorPlanAnalysis,
   DetectedRoom,
@@ -309,6 +310,8 @@ interface ConsumerDesignState {
   selectedStyle: string;
   /** Room-design mode: "made" = real catalog products (phased), "custom" = free imaginary render. */
   designMode: "made" | "custom";
+  /** Quick Room placement: full redesign vs place-only products. */
+  placementMode: QuickRoomPlacementMode;
 
   generatedImageBase64: string | null;
   generatedImageMimeType: string | null;
@@ -469,6 +472,7 @@ interface ConsumerDesignState {
   setTextPrompt: (prompt: string) => void;
   setSelectedStyle: (style: string) => void;
   setDesignMode: (mode: "made" | "custom") => void;
+  setPlacementMode: (mode: QuickRoomPlacementMode) => void;
   setGeneratedImage: (base64: string | null, mimeType: string | null) => void;
   setDesignBrief: (brief: DesignBriefResult | null) => void;
   setDesignHistory: (history: DesignVersion[]) => void;
@@ -551,6 +555,7 @@ const initialState = {
   textPrompt: "",
   selectedStyle: "modern",
   designMode: "custom" as "made" | "custom",
+  placementMode: "redesign" as QuickRoomPlacementMode,
   generatedImageBase64: null as string | null,
   generatedImageMimeType: null as string | null,
   designBrief: null as DesignBriefResult | null,
@@ -703,6 +708,7 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
   setTextPrompt: (prompt) => set({ textPrompt: prompt }),
   setSelectedStyle: (style) => set({ selectedStyle: style }),
   setDesignMode: (mode) => set({ designMode: resolveDesignMode(mode) }),
+  setPlacementMode: (mode) => set({ placementMode: mode }),
 
   setGeneratedImage: (base64, mimeType) =>
     set({ generatedImageBase64: base64, generatedImageMimeType: mimeType }),

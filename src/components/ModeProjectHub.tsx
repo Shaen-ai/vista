@@ -11,6 +11,7 @@ import { useProjectPersistence } from "@/hooks/useProjectPersistence";
 import { getAuthToken } from "@/lib/authApi";
 import { openSavedProject, workspacePathForMode } from "@/lib/openSavedProject";
 import { fetchTokenBalance, grantAnonymousTokens } from "@/lib/vistaTokens";
+import { LowBalancePrompt } from "@/components/LowBalancePrompt";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
 import { useVistaUiTheme } from "@/app/VistaThemeProvider";
 
@@ -170,6 +171,7 @@ export function ModeProjectHub({ mode, createPath, hubPath }: ModeProjectHubProp
           </div>
         </div>
       </main>
+      <LowBalancePrompt />
     </div>
   );
 }

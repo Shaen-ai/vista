@@ -16,7 +16,16 @@ import {
   hydrateInspirationProductsFromLaravel,
   hydrateStyleInspirationsFromLaravel,
   type LaravelInspirationImage,
+  fetchUrlAsBase64,
 } from "@/lib/inspirationPersistence";
+import {
+  applyQuickRoomOptionsFromPreferences,
+  applyQuickRoomPhasedStateFromPreferences,
+  type QuickRoomOptionsPayload,
+  type QuickRoomPhasedStatePayload,
+} from "@/lib/quickRoom/quickRoomPreferences";
+import type { PhaseVersion } from "@/app/store";
+import type { DesignPhase } from "@/lib/phaseRouter";
 
 const API_BASE = "/api/vista/projects";
 
@@ -37,6 +46,8 @@ export interface HydratedProjectData {
   preferences: unknown | null;
   pdfUrl: string | null;
   inspirationImages: LaravelInspirationImage[];
+  placementImages: LaravelInspirationImage[];
+  roomExtraImages: Array<{ url: string; mime: string; id?: string }>;
 }
 
 export interface HydratedVersion {
@@ -119,19 +130,98 @@ function mapOrchestratorUploadedPhotos(
     }));
 }
 
-async function fetchUrlAsBase64(url: string): Promise<{ base64: string; mimeType: string } | null> {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    const mimeType = blob.type || "image/png";
-    const buffer = await blob.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-    return { base64: btoa(binary), mimeType };
-  } catch {
-    return null;
+async function fetchUrlAsBase64FromProject(url: string): Promise<{ base64: string; mimeType: string } | null> {
+  return fetchUrlAsBase64(url);
+}
+
+function mapStoredImageList(raw: unknown): LaravelInspirationImage[] {
+  return mapInspirationImages(raw);
+}
+
+function mapRoomExtraImages(raw: unknown): Array<{ url: string; mime: string; id?: string }> {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item) => item && typeof item === "object" && typeof (item as { url?: string }).url === "string")
+    .map((item) => ({
+      url: (item as { url: string }).url,
+      mime: typeof (item as { mime?: string }).mime === "string" ? (item as { mime: string }).mime : "image/jpeg",
+      id: typeof (item as { id?: string }).id === "string" ? (item as { id: string }).id : undefined,
+    }));
+}
+
+const PHASE_IDS = new Set<DesignPhase>(["base", "furniture", "decor"]);
+
+function isPhaseRoomId(roomId: string | null): roomId is DesignPhase {
+  return roomId !== null && PHASE_IDS.has(roomId as DesignPhase);
+}
+
+async function hydratePhasedVersionsFromProject(versions: HydratedVersion[]): Promise<void> {
+  const store = useConsumerDesignStore.getState();
+  const phaseVersions: Partial<Record<DesignPhase, PhaseVersion[]>> = {};
+  const viewpointTracks: Record<string, {
+    phase1Versions: PhaseVersion[];
+    phase1SelectedIndex: number;
+    phase2Versions: PhaseVersion[];
+    phase2SelectedIndex: number;
+    phase3Versions: PhaseVersion[];
+    phase3SelectedIndex: number;
+  }> = {};
+
+  for (const version of versions) {
+    const img = version.fileUrl ? await fetchUrlAsBase64FromProject(version.fileUrl) : null;
+    if (!img) continue;
+
+    const phaseVersion: PhaseVersion = {
+      id: version.id,
+      image: { base64: img.base64, mimeType: img.mimeType },
+      products: Array.isArray(version.productsUsed)
+        ? version.productsUsed.map((p) => String((p as { id?: unknown; title?: unknown }).id ?? (p as { title?: string }).title ?? p))
+        : [],
+      timestamp: version.createdAt ? new Date(version.createdAt).getTime() : Date.now(),
+    };
+
+    if (isPhaseRoomId(version.roomId)) {
+      const phase: DesignPhase = version.roomId;
+      if (!phaseVersions[phase]) phaseVersions[phase] = [];
+      phaseVersions[phase]!.push(phaseVersion);
+      continue;
+    }
+
+    if (version.roomId && version.type === "viewpoint") {
+      const trackId = version.roomId;
+      if (!viewpointTracks[trackId]) {
+        viewpointTracks[trackId] = {
+          phase1Versions: [],
+          phase1SelectedIndex: 0,
+          phase2Versions: [],
+          phase2SelectedIndex: 0,
+          phase3Versions: [],
+          phase3SelectedIndex: 0,
+        };
+      }
+      const track = viewpointTracks[trackId]!;
+      if (version.fileUrl.includes("/phases/base/") || version.roomId === "base") {
+        track.phase1Versions.push(phaseVersion);
+      } else if (version.fileUrl.includes("/phases/furniture/")) {
+        track.phase2Versions.push(phaseVersion);
+      } else if (version.fileUrl.includes("/phases/decor/")) {
+        track.phase3Versions.push(phaseVersion);
+      } else {
+        track.phase1Versions.push(phaseVersion);
+      }
+    }
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (phaseVersions.base?.length) {
+    updates.phase1Versions = phaseVersions.base;
+    updates.phasedDesignActive = true;
+  }
+  if (phaseVersions.furniture?.length) updates.phase2Versions = phaseVersions.furniture;
+  if (phaseVersions.decor?.length) updates.phase3Versions = phaseVersions.decor;
+  if (Object.keys(viewpointTracks).length > 0) updates.viewpointTracks = viewpointTracks;
+  if (Object.keys(updates).length > 0) {
+    useConsumerDesignStore.setState(updates);
   }
 }
 
@@ -162,6 +252,8 @@ export async function fetchProjectDetail(projectId: string): Promise<HydratedPro
       preferences: d.preferences ?? null,
       pdfUrl: d.pdf_url ?? null,
       inspirationImages: mapInspirationImages(d.inspiration_images),
+      placementImages: mapStoredImageList(d.placement_images),
+      roomExtraImages: mapRoomExtraImages(d.room_extra_images),
     };
   } catch {
     return null;
@@ -216,11 +308,45 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
   store.setVistaMode("quick");
   store.setSelectedStyle(project.style ?? "modern");
 
+  const prefs = (project.preferences ?? {}) as {
+    draftPrompt?: string;
+    quickRoomOptions?: Partial<QuickRoomOptionsPayload>;
+    quickRoomPhasedState?: Partial<QuickRoomPhasedStatePayload>;
+  };
+
+  applyQuickRoomOptionsFromPreferences(prefs.quickRoomOptions);
+  applyQuickRoomPhasedStateFromPreferences(prefs.quickRoomPhasedState);
+
   if (project.roomImageUrl) {
-    const roomImg = await fetchUrlAsBase64(project.roomImageUrl);
+    const roomImg = await fetchUrlAsBase64FromProject(project.roomImageUrl);
     if (roomImg) {
       store.hydrateRoomImage(roomImg.base64, roomImg.mimeType);
     }
+  }
+
+  if (project.roomExtraImages.length > 0) {
+    useConsumerDesignStore.setState({ quickRoomExtraPhotos: [] });
+    for (const extra of project.roomExtraImages) {
+      const img = await fetchUrlAsBase64FromProject(extra.url);
+      if (img) {
+        store.addQuickRoomExtraPhoto(img.base64, img.mimeType);
+        if (extra.id) {
+          const photos = useConsumerDesignStore.getState().quickRoomExtraPhotos;
+          const last = photos[photos.length - 1];
+          if (last) {
+            useConsumerDesignStore.setState({
+              quickRoomExtraPhotos: photos.map((p) =>
+                p.id === last.id ? { ...p, id: extra.id! } : p,
+              ),
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (project.placementImages.length > 0) {
+    await hydrateInspirationProductsFromLaravel(project.placementImages);
   }
 
   if (project.roomAnalysis) {
@@ -232,8 +358,11 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
 
   const versions = project.versions;
   if (versions.length > 0) {
-    const latest = versions[versions.length - 1]!;
-    const latestImg = latest.fileUrl ? await fetchUrlAsBase64(latest.fileUrl) : null;
+    const standardVersions = versions.filter(
+      (v) => !isPhaseRoomId(v.roomId) && v.type !== "viewpoint" && v.type !== "phased",
+    );
+    const latest = standardVersions.length > 0 ? standardVersions[standardVersions.length - 1]! : versions[versions.length - 1]!;
+    const latestImg = latest.fileUrl ? await fetchUrlAsBase64FromProject(latest.fileUrl) : null;
     if (latestImg) {
       store.setGeneratedImage(latestImg.base64, latestImg.mimeType);
     } else {
@@ -245,8 +374,8 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
     }
 
     const historyEntries: DesignVersion[] = [];
-    for (const v of versions.slice(0, -1).reverse()) {
-      const img = v.fileUrl ? await fetchUrlAsBase64(v.fileUrl) : null;
+    for (const v of standardVersions.slice(0, -1).reverse()) {
+      const img = v.fileUrl ? await fetchUrlAsBase64FromProject(v.fileUrl) : null;
       historyEntries.push({
         id: v.id,
         imageBase64: img?.base64 ?? "",
@@ -257,6 +386,8 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
       });
     }
     store.setDesignHistory(historyEntries);
+
+    await hydratePhasedVersionsFromProject(versions);
   } else {
     store.setGeneratedImage(null, null);
     store.setDesignBrief(null);
@@ -264,10 +395,13 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
     store.setDesignHistory([]);
   }
 
+  const draftPrompt = prefs.draftPrompt?.trim();
   const lastUserMsg = [...project.messages].reverse().find(
     (m) => m.role === "user" && m.contentType === "text",
   );
-  if (lastUserMsg?.text) {
+  if (draftPrompt) {
+    store.setTextPrompt(draftPrompt);
+  } else if (lastUserMsg?.text) {
     store.setTextPrompt(lastUserMsg.text);
   }
 
@@ -310,7 +444,7 @@ async function hydrateFullProjectFromOrchestrator(
     if (data.floorPlanBase64 && data.floorPlanMimeType) {
       store.setFloorPlan(data.floorPlanBase64, data.floorPlanMimeType);
     } else if (project.floorPlanUrl) {
-      const fp = await fetchUrlAsBase64(project.floorPlanUrl);
+      const fp = await fetchUrlAsBase64FromProject(project.floorPlanUrl);
       if (fp) store.setFloorPlan(fp.base64, fp.mimeType);
     }
 

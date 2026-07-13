@@ -28,9 +28,11 @@ export interface VistaProjectApi {
     designBrief?: Record<string, unknown> | null;
     productsUsed?: unknown[] | null;
     roomGeometry?: Record<string, unknown> | null;
-    type?: "generated" | "edited" | "regenerated";
+    type?: "generated" | "edited" | "regenerated" | "phased" | "viewpoint";
     roomId?: string | null;
     angleIndex?: number;
+    phase?: string | null;
+    viewpointId?: string | null;
   }) => Promise<string | null>;
 
   addMessage: (params: {
@@ -49,6 +51,24 @@ export interface VistaProjectApi {
     projectId: string,
     items: Array<{ base64: string; mime: string; label?: string }>,
   ) => Promise<boolean>;
+  saveRoomExtras: (
+    projectId: string,
+    items: Array<{ base64: string; mime: string; id?: string }>,
+  ) => Promise<boolean>;
+  savePlacementImages: (
+    projectId: string,
+    items: Array<{ base64: string; mime: string; label?: string; id?: string }>,
+  ) => Promise<boolean>;
+  saveRoomImage: (
+    projectId: string,
+    base64: string,
+    mime: string,
+  ) => Promise<boolean>;
+  saveQuickRoomPreferences: (
+    projectId: string,
+    prefs: import("@/lib/quickRoom/quickRoomPreferences").QuickRoomPreferencesPatch,
+  ) => Promise<boolean>;
+  fetchProjectPreferences: (projectId: string) => Promise<Record<string, unknown>>;
   syncOrchestratorId: (orchestratorProjectId: string) => Promise<void>;
   loadProjects: (options?: { mode?: "quick_room" | "project" }) => Promise<void>;
   isAuthenticated: () => boolean;
@@ -154,9 +174,11 @@ export function useProjectPersistence(): VistaProjectApi {
     designBrief?: Record<string, unknown> | null;
     productsUsed?: unknown[] | null;
     roomGeometry?: Record<string, unknown> | null;
-    type?: "generated" | "edited" | "regenerated";
+    type?: "generated" | "edited" | "regenerated" | "phased" | "viewpoint";
     roomId?: string | null;
     angleIndex?: number;
+    phase?: string | null;
+    viewpointId?: string | null;
   }): Promise<string | null> => {
     const pid = projectIdRef.current;
     if (!pid || !isAuthenticated()) return null;
@@ -172,6 +194,8 @@ export function useProjectPersistence(): VistaProjectApi {
       if (params.type) body.type = params.type;
       if (params.roomId) body.room_id = params.roomId;
       if (params.angleIndex !== undefined) body.angle_index = params.angleIndex;
+      if (params.phase) body.phase = params.phase;
+      if (params.viewpointId) body.viewpoint_id = params.viewpointId;
 
       const res = await fetch(`${API_BASE}/${pid}/versions`, {
         method: "POST",
@@ -239,6 +263,68 @@ export function useProjectPersistence(): VistaProjectApi {
     return patchProject(projectId, { inspiration_images: items });
   }, [patchProject]);
 
+  const saveRoomExtras = useCallback(async (
+    projectId: string,
+    items: Array<{ base64: string; mime: string; id?: string }>,
+  ): Promise<boolean> => {
+    return patchProject(projectId, { room_extra_images: items });
+  }, [patchProject]);
+
+  const savePlacementImages = useCallback(async (
+    projectId: string,
+    items: Array<{ base64: string; mime: string; label?: string; id?: string }>,
+  ): Promise<boolean> => {
+    return patchProject(projectId, { placement_images: items });
+  }, [patchProject]);
+
+  const saveRoomImage = useCallback(async (
+    projectId: string,
+    base64: string,
+    mime: string,
+  ): Promise<boolean> => {
+    return patchProject(projectId, {
+      room_image_base64: base64,
+      room_image_mime: mime,
+    });
+  }, [patchProject]);
+
+  const fetchProjectPreferences = useCallback(async (projectId: string): Promise<Record<string, unknown>> => {
+    if (!isAuthenticated()) return {};
+    try {
+      const res = await fetch(`${API_BASE}/${projectId}`, { headers: authJsonHeaders() });
+      if (!res.ok) return {};
+      const json = await res.json();
+      return (json.data?.preferences ?? {}) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }, [isAuthenticated]);
+
+  const saveQuickRoomPreferences = useCallback(async (
+    projectId: string,
+    prefs: import("@/lib/quickRoom/quickRoomPreferences").QuickRoomPreferencesPatch,
+  ): Promise<boolean> => {
+    const existing = await fetchProjectPreferences(projectId);
+    const merged = { ...existing, ...prefs };
+    if (prefs.quickRoomOptions) {
+      merged.quickRoomOptions = {
+        ...(typeof existing.quickRoomOptions === "object" && existing.quickRoomOptions
+          ? existing.quickRoomOptions as Record<string, unknown>
+          : {}),
+        ...prefs.quickRoomOptions,
+      };
+    }
+    if (prefs.quickRoomPhasedState) {
+      merged.quickRoomPhasedState = {
+        ...(typeof existing.quickRoomPhasedState === "object" && existing.quickRoomPhasedState
+          ? existing.quickRoomPhasedState as Record<string, unknown>
+          : {}),
+        ...prefs.quickRoomPhasedState,
+      };
+    }
+    return patchProject(projectId, { preferences: merged });
+  }, [fetchProjectPreferences, patchProject]);
+
   const renameProject = useCallback(async (projectId: string, title: string): Promise<boolean> => {
     return patchProject(projectId, { title });
   }, [patchProject]);
@@ -281,6 +367,11 @@ export function useProjectPersistence(): VistaProjectApi {
     deleteProject,
     patchProject,
     saveInspirationImages,
+    saveRoomExtras,
+    savePlacementImages,
+    saveRoomImage,
+    saveQuickRoomPreferences,
+    fetchProjectPreferences,
     syncOrchestratorId,
     loadProjects,
     isAuthenticated,

@@ -65,16 +65,15 @@ const StructuralBoundaryCanvas = dynamic(
   { ssr: false },
 );
 import { useProjectPersistence } from "@/hooks/useProjectPersistence";
+import { useQuickRoomAutosave } from "@/hooks/useQuickRoomAutosave";
 import { getAuthToken } from "@/lib/authApi";
 import { DEFAULT_QUICK_ROOM_PROMPT } from "@/lib/quickRoomDefaultPrompt";
 import { useProjectSessionRestore } from "@/hooks/useProjectSessionRestore";
 import { subscribeToProjectSession } from "@/app/store";
 import {
   applyStyleInspirationsToStore,
-  fetchLaravelInspirationImages,
-  hydrateStyleInspirationsFromLaravel,
-  styleInspirationsToPatchPayload,
 } from "@/lib/inspirationPersistence";
+import { loadAndHydrateProject } from "@/lib/projectHydration";
 import { loadSessionBlobs, loadSessionMeta } from "@/lib/project/sessionStorage";
 import "@/app/design.css";
 import { useRouter } from "next/navigation";
@@ -91,7 +90,6 @@ const GenerationDebugPanel = dynamic(
 );
 import { isArmeniaLocalScrapedExclusive } from "@/lib/scrapedAllowlist";
 import { analyzeAndRedesign, runPhasedGeneration } from "@/lib/analyzeAndRedesign";
-import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
 import type { GenerationClientTrace } from "@/lib/generationDebug";
 import { catalogCategorySortKey, PRODUCT_DISPLAY_BAND } from "@/lib/productDisplayOrder";
 import {
@@ -119,6 +117,7 @@ import {
   throwIfAiServiceUnavailable,
 } from "@/lib/aiServiceError";
 import { SupportContactModal } from "@/components/SupportContactModal";
+import { LowBalancePrompt } from "@/components/LowBalancePrompt";
 import { useVistaUiTheme } from "@/app/VistaThemeProvider";
 import { VistaHeaderActions } from "@/components/VistaHeaderActions";
 import {
@@ -126,9 +125,9 @@ import {
   authContextForApi,
   fetchTokenBalance,
   grantAnonymousTokens,
-  startTokenTopUpCheckout,
   type TokenAction,
 } from "@/lib/vistaTokens";
+import { forceOpenLowBalancePrompt } from "@/lib/lowBalancePrompt";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
 import { useCatalogLabels } from "@/i18n/catalogLabels";
 import {
@@ -1047,6 +1046,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     textPrompt,
     selectedStyle,
     designMode,
+    placementMode,
     generatedImageBase64,
     generatedImageMimeType,
     designBrief,
@@ -1072,6 +1072,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setQuickRoomAnalyzeError,
     setTextPrompt,
     setSelectedStyle,
+    setPlacementMode,
     setGeneratedImage,
     setDesignBrief,
     pushDesignVersion,
@@ -1186,23 +1187,13 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     let cancelled = false;
     void (async () => {
       const meta = loadSessionMeta("quick");
-      if (!meta || cancelled) return;
-      const blobs = await loadSessionBlobs();
-      if (cancelled) return;
-
-      const store = useConsumerDesignStore.getState();
-      if (meta.projectDbId) {
-        store.setCurrentProjectDbId(meta.projectDbId);
-      }
-
-      const projectDbId = meta.projectDbId ?? store.currentProjectDbId;
+      const projectDbId = meta?.projectDbId ?? useConsumerDesignStore.getState().currentProjectDbId;
       if (projectDbId && getAuthToken()) {
-        const laravelImages = await fetchLaravelInspirationImages(projectDbId);
-        if (!cancelled && laravelImages.length > 0) {
-          await hydrateStyleInspirationsFromLaravel(laravelImages);
-          return;
-        }
+        const ok = await loadAndHydrateProject(projectDbId);
+        if (!cancelled && ok) return;
       }
+      if (cancelled) return;
+      const blobs = await loadSessionBlobs();
       if (!cancelled) {
         applyStyleInspirationsToStore(blobs?.styleInspirations);
       }
@@ -1243,7 +1234,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     mimeType: string;
   } | null>(null);
   const [removalEditorOpen, setRemovalEditorOpen] = useState(false);
-  const [placementMode, setPlacementMode] = useState<QuickRoomPlacementMode>("redesign");
   const [phasedSlotNotices, setPhasedSlotNotices] = useState<string[]>([]);
 
   const resetPhasedAnnotation = useCallback(() => {
@@ -1261,7 +1251,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const [mobileTab, setMobileTab] = useState<"search" | "design" | "selected">("design");
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [roomCameraOpen, setRoomCameraOpen] = useState(false);
-  const [topUpRedirecting, setTopUpRedirecting] = useState(false);
   const [allProductsModalOpen, setAllProductsModalOpen] = useState(false);
   const [catalogTotalCount, setCatalogTotalCount] = useState(0);
   const [saveDesignModalOpen, setSaveDesignModalOpen] = useState(false);
@@ -1271,13 +1260,12 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const [supportModalOpen, setSupportModalOpen] = useState(false);
   const {
     loadProjects,
-    createProject,
-    addVersion,
-    addMessage,
     renameProject,
-    saveInspirationImages,
     isAuthenticated: isPersistenceAuthenticated,
   } = useProjectPersistence();
+  const { ensureProject, persistGeneratedVersion } = useQuickRoomAutosave({
+    enabled: variant === "quick-workspace",
+  });
 
   useEffect(() => {
     if (getAuthToken()) {
@@ -1317,13 +1305,11 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           : "";
 
   const generateButtonLoadingMessage =
-    topUpRedirecting
-      ? t("tokens.fillBalance")
-      : phasedDesignActive && isGenerating && phasedProgressText
-        ? phasedProgressText
-        : phasedDesignActive && isGenerating
-          ? t("page.generatingDesign")
-          : generatePhaseMessage;
+    phasedDesignActive && isGenerating && phasedProgressText
+      ? phasedProgressText
+      : phasedDesignActive && isGenerating
+        ? t("page.generatingDesign")
+        : generatePhaseMessage;
 
   useEffect(() => {
     setObjectRemovalMask(null);
@@ -1781,24 +1767,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     const generateStartedAt = Date.now();
     track("design_generate_started", { mode: "quick", token_action: tokenAction });
 
-    if (isPersistenceAuthenticated() && !useConsumerDesignStore.getState().currentProjectDbId) {
-      await createProject({
-        mode: "quick_room",
-        title: prompt.slice(0, 80) || undefined,
-        style: selectedStyle,
-        roomImageBase64: imgB64,
-        roomImageMime: imgMime,
-        roomAnalysis: (quickRoomAnalysis ?? undefined) as Record<string, unknown> | undefined,
-        roomGeometry: (lastRoomGeometry ?? undefined) as Record<string, unknown> | undefined,
-      });
-      await loadProjects();
-    }
-
-    const projectDbId = useConsumerDesignStore.getState().currentProjectDbId;
-    const styleInspirationPayload = styleInspirationsToPatchPayload(styleInspirations);
-    if (projectDbId && isPersistenceAuthenticated() && styleInspirationPayload.length > 0) {
-      void saveInspirationImages(projectDbId, styleInspirationPayload);
-    }
+    await ensureProject();
 
     if (generatedImageBase64 && generatedImageMimeType) {
       pushDesignVersion({
@@ -2015,28 +1984,22 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
       const generatedBase64 = images?.[0]?.base64;
       const generatedMime = images?.[0]?.mimeType ?? "image/png";
-      if (generatedBase64 && isPersistenceAuthenticated() && useConsumerDesignStore.getState().currentProjectDbId) {
+      if (generatedBase64) {
         const versionType = opts?.feedbackText
           ? "edited"
           : tokenAction === "regenerate"
             ? "regenerated"
             : "generated";
-        await addVersion({
+        void persistGeneratedVersion({
           base64: generatedBase64,
           mimeType: generatedMime,
-          promptUsed: prompt,
+          prompt,
           feedback: opts?.feedbackText ?? null,
           designBrief: json.data?.designBrief ?? null,
           productsUsed: json.data?.productLinks ?? null,
           roomGeometry: (returnedGeometry ?? null) as Record<string, unknown> | null,
           type: versionType,
         });
-        await addMessage({
-          role: "user",
-          contentType: "text",
-          text: prompt,
-        });
-        await loadProjects();
       }
     } catch (err) {
       void refreshTokenBalance();
@@ -2093,12 +2056,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     tokenBalance,
     setTokenBalance,
     refreshTokenBalance,
-    createProject,
-    addVersion,
-    addMessage,
-    loadProjects,
-    isPersistenceAuthenticated,
-    saveInspirationImages,
+    ensureProject,
+    persistGeneratedVersion,
     t,
   ]);
 
@@ -2112,6 +2071,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const handleStartPhasedDesign = useCallback(async () => {
     if (!roomImageBase64 || !roomImageMimeType || isGenerating) return;
     track("design_generate_started", { mode: "phased", phase: "base" });
+    await ensureProject();
     startPhasedDesign();
     setIsGenerating(true);
     setError(null);
@@ -2168,6 +2128,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       });
 
       setPhaseResult("base", result.image, result.confirmedProducts);
+      void persistGeneratedVersion({
+        base64: result.image.base64,
+        mimeType: result.image.mimeType,
+        prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+        productsUsed: result.productLinks ?? null,
+        type: "phased",
+        phase: "base",
+      });
       track("design_generate_succeeded", { mode: "phased", phase: "base" });
       setPhasedAllProductLinks(result.productLinks);
       setPhasedAllProductIds(result.allPhaseProductIds);
@@ -2198,6 +2166,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                 products: extraResult.confirmedProducts,
                 timestamp: Date.now(),
               });
+              void persistGeneratedVersion({
+                base64: extraResult.image.base64,
+                mimeType: extraResult.image.mimeType,
+                prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+                type: "viewpoint",
+                phase: "base",
+                viewpointId: photo.id,
+              });
             } catch (err) {
               console.warn(`Extra viewpoint base generation failed for ${photo.id}:`, err);
             }
@@ -2221,27 +2197,15 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     selectedCountry, searchMode, quickRoomAnalysis, selectedProducts, searchResults,
     inspirationProducts, styleInspirations, startPhasedDesign, setIsGenerating, setError, setPhasedStatus,
     setPhaseResult, setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedError, setTokenBalance,
-    setViewpointTrackResult,
+    setViewpointTrackResult, ensureProject, persistGeneratedVersion,
   ]);
 
   const handleGenerateClick = useCallback(async () => {
-    if (!generateFormReady || isGenerating || topUpRedirecting) return;
+    if (!generateFormReady || isGenerating) return;
 
     if (insufficientTokensForGenerate) {
-      setTopUpRedirecting(true);
       setError(null);
-      try {
-        const url = await startTokenTopUpCheckout(locale, selectedCountry);
-        window.location.href = url;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : t("tokens.couldNotStartCheckout");
-        if (/sign in/i.test(msg)) {
-          window.location.href = "/login?next=/";
-          return;
-        }
-        setError(msg);
-        setTopUpRedirecting(false);
-      }
+      forceOpenLowBalancePrompt();
       return;
     }
 
@@ -2257,10 +2221,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     handleStartPhasedDesign,
     insufficientTokensForGenerate,
     isGenerating,
-    locale,
-    selectedCountry,
-    t,
-    topUpRedirecting,
   ]);
 
   const handleApprovePhase = useCallback(async () => {
@@ -2284,6 +2244,13 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       if (finalImage) {
         setGeneratedImage(finalImage.base64, finalImage.mimeType);
         setProductLinks(phasedAllProductLinks);
+        void persistGeneratedVersion({
+          base64: finalImage.base64,
+          mimeType: finalImage.mimeType,
+          prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+          productsUsed: phasedAllProductLinks as unknown[] | null,
+          type: "generated",
+        });
       }
       setPhasedPhase("complete");
       track("design_generate_succeeded", { mode: "phased", phase: "complete" });
@@ -2382,6 +2349,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       });
 
       setPhaseResult(nextPhase, result.image, result.confirmedProducts);
+      void persistGeneratedVersion({
+        base64: result.image.base64,
+        mimeType: result.image.mimeType,
+        prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+        productsUsed: result.productLinks ?? null,
+        type: "phased",
+        phase: nextPhase,
+      });
       track("design_generate_succeeded", { mode: "phased", phase: nextPhase });
       setPhasedAllProductLinks(result.productLinks);
       setPhasedAllProductIds(result.allPhaseProductIds);
@@ -2430,6 +2405,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                 products: extraResult.confirmedProducts,
                 timestamp: Date.now(),
               });
+              void persistGeneratedVersion({
+                base64: extraResult.image.base64,
+                mimeType: extraResult.image.mimeType,
+                prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+                type: "viewpoint",
+                phase: nextPhase,
+                viewpointId: photo.id,
+              });
             } catch (err) {
               console.warn(`Extra viewpoint ${nextPhase} generation failed for ${photo.id}:`, err);
             }
@@ -2453,7 +2436,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     searchMode, quickRoomAnalysis, lastRoomGeometry, selectedProducts, searchResults, inspirationProducts, styleInspirations,
     approvePhase, setIsGenerating, setPhasedPhase, setPhasedStatus, setPhaseResult,
     setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedFinalViews, setPhasedError, setTokenBalance, setGeneratedImage, setProductLinks,
-    resetPhasedAnnotation, setViewpointTrackResult,
+    resetPhasedAnnotation, setViewpointTrackResult, persistGeneratedVersion,
   ]);
 
   const handleRedoPhase = useCallback(async () => {
@@ -2522,6 +2505,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       });
 
       setPhaseResult(currentPhase, result.image, result.confirmedProducts);
+      void persistGeneratedVersion({
+        base64: result.image.base64,
+        mimeType: result.image.mimeType,
+        prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+        productsUsed: result.productLinks ?? null,
+        type: "phased",
+        phase: currentPhase,
+      });
       setPhasedAllProductLinks(result.productLinks);
       setPhasedAllProductIds(result.allPhaseProductIds);
       if (result.imaginedSlots?.length) {
@@ -2540,7 +2531,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     roomImageBase64, roomImageMimeType, textPrompt, selectedStyle,
     selectedCountry, searchMode, quickRoomAnalysis, selectedProducts, inspirationProducts, styleInspirations,
     setIsGenerating, setPhasedStatus, setPhaseResult, setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedError, setTokenBalance,
-    resetPhasedAnnotation,
+    resetPhasedAnnotation, persistGeneratedVersion,
   ]);
 
   const handlePhaseEditSubmit = useCallback(async () => {
@@ -2628,6 +2619,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       });
 
       setPhaseResult(currentPhase, result.image, result.confirmedProducts);
+      void persistGeneratedVersion({
+        base64: result.image.base64,
+        mimeType: result.image.mimeType,
+        prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+        productsUsed: result.productLinks ?? null,
+        type: "phased",
+        phase: currentPhase,
+      });
       setPhasedAllProductLinks(result.productLinks);
       setPhasedAllProductIds(result.allPhaseProductIds);
       if (result.imaginedSlots?.length) {
@@ -2647,7 +2646,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     roomImageBase64, roomImageMimeType, textPrompt, selectedStyle,
     selectedCountry, searchMode, quickRoomAnalysis, selectedProducts, inspirationProducts, styleInspirations,
     setIsGenerating, setPhasedStatus, setPhaseResult, setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedError, setTokenBalance,
-    resetPhasedAnnotation,
+    resetPhasedAnnotation, persistGeneratedVersion,
   ]);
 
   const handleSkipDecor = useCallback(() => {
@@ -2764,37 +2763,18 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     const title = saveDesignName.trim() || generateAutoDesignName();
     setSaveDesignSaving(true);
 
-    const projectId = useConsumerDesignStore.getState().currentProjectDbId;
-
+    const projectId = (await ensureProject()) ?? useConsumerDesignStore.getState().currentProjectDbId;
     if (projectId) {
       await renameProject(projectId, title);
-    } else if (isPersistenceAuthenticated()) {
-      const newId = await createProject({
-        mode: "quick_room",
-        title,
-        style: selectedStyle,
-        roomImageBase64: roomImageBase64,
-        roomImageMime: roomImageMimeType,
-      });
-      if (newId && generatedImageBase64) {
-        await addVersion({
-          base64: generatedImageBase64,
-          mimeType: generatedImageMimeType ?? "image/png",
-          designBrief: designBrief as Record<string, unknown> | null,
-          productsUsed: productLinks as unknown[] | null,
-          type: "generated",
-        });
-      }
     }
 
-    await loadProjects();
+    await loadProjects({ mode: "quick_room" });
     setSaveDesignSaving(false);
     setSaveDesignDone(true);
     setTimeout(() => setSaveDesignModalOpen(false), 1200);
   }, [
-    saveDesignName, generateAutoDesignName, renameProject, isPersistenceAuthenticated,
-    createProject, addVersion, loadProjects, selectedStyle, roomImageBase64,
-    roomImageMimeType, generatedImageBase64, generatedImageMimeType, designBrief, productLinks,
+    saveDesignName, generateAutoDesignName, renameProject, ensureProject,
+    loadProjects,
   ]);
 
   const handleDownloadLightbox = useCallback(() => {
@@ -3865,14 +3845,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               <button
                 type="button"
                 onClick={() => void handleGenerateClick()}
-                disabled={!generateFormReady || isGenerating || topUpRedirecting}
+                disabled={!generateFormReady || isGenerating}
                 className={`cd-generate-btn w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl text-base font-bold transition-all cursor-pointer ${
-                  generateFormReady && !isGenerating && !topUpRedirecting
+                  generateFormReady && !isGenerating
                     ? "bg-[var(--primary)] text-white hover:brightness-110 shadow-lg shadow-[var(--primary)]/20"
                     : "bg-[var(--muted)] text-[var(--muted-foreground)] cursor-not-allowed"
                 }`}
               >
-                {isGenerating || topUpRedirecting ? (
+                {isGenerating ? (
                   <>
                     <Loader2 size={20} className="animate-spin" />
                     {generateButtonLoadingMessage}
@@ -4522,6 +4502,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       )}
 
       <SupportContactModal open={supportModalOpen} onClose={() => setSupportModalOpen(false)} />
+      <LowBalancePrompt />
 
       <AllProductsModal
         open={allProductsModalOpen}
