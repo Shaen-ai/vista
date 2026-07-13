@@ -15,10 +15,11 @@ test("localUploadStorage writes and resolves paths under custom root", async () 
   process.env.VISTA_PUBLIC_ORIGIN = "https://vista.example.com";
 
   const relative = await saveUploadToDisk(Buffer.from("png-bytes"), "image/png", {
-    sessionId: "proj-1",
+    userId: "user-1",
+    projectId: "proj-1",
     type: "original",
   });
-  assert.match(relative, /^proj-1\/[0-9a-f-]+\.png$/);
+  assert.match(relative, /^user-1\/proj-1\/[0-9a-f-]+\.png$/);
 
   const absolute = resolveUploadFilePath(relative);
   assert.ok(absolute);

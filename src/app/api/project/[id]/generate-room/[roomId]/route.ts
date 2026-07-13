@@ -31,8 +31,10 @@ import {
   isOverloadedAiError,
   reportOverloadedIncident,
 } from "@/lib/aiIncident";
+import { createSseEmitter, isStreamClosedError } from "@/lib/sseStream";
 import { resolveProjectTokenAction } from "@/lib/project/projectTokenAction";
 import { checkTokensServer, consumeTokensServer } from "@/lib/serverVistaTokens";
+import { withRequestUploadUser } from "@/lib/uploadUserContext";
 
 export const maxDuration = 900;
 
@@ -48,6 +50,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; roomId: string }> },
 ) {
+  return withRequestUploadUser(request, async () => {
   const { id, roomId } = await params;
 
   const project = await getProject(id);
@@ -90,15 +93,11 @@ export async function POST(
     }
   }
 
-  const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
+      const { emit: emitRaw, close } = createSseEmitter(controller);
       let tokenConsumed = false;
       let billingChain: Promise<void> = Promise.resolve();
-
-      function emitRaw(event: unknown) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-      }
 
       async function emitWithBilling(event: unknown) {
         const ev = event as ProgressEvent;
@@ -199,7 +198,9 @@ export async function POST(
         await billingChain;
       } catch (error: unknown) {
         await billingChain;
-        if (error instanceof GenerationCancelledError) {
+        if (isStreamClosedError(error)) {
+          // Client disconnected — do not overwrite room meta or page support.
+        } else if (error instanceof GenerationCancelledError) {
           send({ phase: "error", message: GENERATION_CANCELLED_MESSAGE, data: { code: "cancelled" } });
         } else if (error instanceof Error && error.message === LOCAL_SCRAPED_CATALOG_EMPTY_CODE) {
           send({
@@ -219,12 +220,12 @@ export async function POST(
             route: "/api/project/[id]/generate-room/[roomId]",
             phase: typeof phase === "string" ? phase : undefined,
           });
-          send(event);
+          if (event) send(event);
         }
         await billingChain;
       } finally {
         await billingChain;
-        controller.close();
+        close();
       }
     },
   });
@@ -236,5 +237,6 @@ export async function POST(
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     },
+  });
   });
 }

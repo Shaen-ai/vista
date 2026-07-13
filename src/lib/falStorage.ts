@@ -3,6 +3,7 @@ import "server-only";
 import { fal } from "@fal-ai/client";
 import { getFalKey } from "@/lib/serverAiKeys";
 import { buildPublicUploadUrl, saveUploadToDisk } from "@/lib/localUploadStorage";
+import { getUploadUserId } from "@/lib/uploadUserContext";
 import { pipelineLog, pipelineTimed } from "@/lib/pipelineLog";
 /**
  * fal needs PUBLICLY reachable URLs for `image_url` / `mask_url` — it fetches them
@@ -35,9 +36,14 @@ async function uploadViaFalStorage(buffer: Buffer, mime: string): Promise<string
 async function uploadViaLocalDisk(
   buffer: Buffer,
   mime: string,
-  opts?: { sessionId?: string; type?: "original" | "generated" | "edited" },
+  opts?: UploadPublicImageOpts,
 ): Promise<string> {
-  const relativePath = await saveUploadToDisk(buffer, mime, opts);
+  const relativePath = await saveUploadToDisk(buffer, mime, {
+    userId: opts?.userId ?? getUploadUserId(),
+    projectId: opts?.projectId ?? opts?.sessionId,
+    sessionId: opts?.sessionId,
+    type: opts?.type,
+  });
   return buildPublicUploadUrl(relativePath);
 }
 
@@ -50,16 +56,19 @@ function urlHost(url: string): string {
 }
 
 function deriveUploadLabel(
-  opts?: { type?: string; sessionId?: string; label?: string },
+  opts?: { type?: string; sessionId?: string; projectId?: string; label?: string },
 ): string {
   if (opts?.label?.trim()) return opts.label.trim();
   const type = opts?.type ?? "image";
-  const sid = opts?.sessionId?.slice(-8);
-  return sid ? `${type}-${sid}` : type;
+  const pid = (opts?.projectId ?? opts?.sessionId)?.slice(-8);
+  return pid ? `${type}-${pid}` : type;
 }
 
 export type UploadPublicImageOpts = {
+  /** @deprecated Use projectId */
   sessionId?: string;
+  projectId?: string;
+  userId?: string;
   type?: "original" | "generated" | "edited";
   /** Greppable label in fal upload logs, e.g. "style-plate". */
   label?: string;
@@ -76,6 +85,7 @@ export async function uploadPublicImage(
   const useLocal = (process.env.VISTA_FAL_USE_LOCAL_STORAGE || "").trim() === "1";
   const target = useLocal ? "local-disk" : "fal-storage";
   const label = deriveUploadLabel(opts);
+  const projectId = opts?.projectId ?? opts?.sessionId;
 
   return pipelineTimed(
     "FAL_PIPELINE",
@@ -84,6 +94,8 @@ export async function uploadPublicImage(
       if (useLocal) {
         try {
           return await uploadViaLocalDisk(buffer, mime, {
+            userId: opts?.userId,
+            projectId,
             sessionId: opts?.sessionId,
             type: opts?.type,
           });
@@ -104,6 +116,8 @@ export async function uploadPublicImage(
         bytes: buffer.byteLength,
         mime,
         target,
+        userId: opts?.userId ?? getUploadUserId(),
+        projectId,
         sessionId: opts?.sessionId,
       },
       completeMeta: (url) => ({ urlHost: urlHost(url) }),

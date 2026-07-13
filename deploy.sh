@@ -151,7 +151,10 @@ $SSH "$SERVER" "
 "
 
 echo "==> Ensuring Vista upload storage directory ..."
-$SSH "$SERVER" "sudo mkdir -p /var/www/tunzone/vista/uploads && sudo chown -R '$REMOTE_OWNER' /var/www/tunzone/vista"
+$SSH "$SERVER" "sudo mkdir -p /var/www/tunzone/vista/uploads \
+  && sudo chown -R www-data:www-data /var/www/tunzone/vista/uploads \
+  && sudo chmod -R 2775 /var/www/tunzone/vista/uploads \
+  && sudo usermod -aG www-data ubuntu 2>/dev/null || true"
 
 echo "==> Installing, building, and restarting PM2 on server..."
 # ssh bash -s: pass REMOTE_DIR / PM2_NAME / PORT / NPM_BUILD_SCRIPT as argv (no brittle local heredoc expansion).

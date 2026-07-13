@@ -1,10 +1,42 @@
 "use client";
 
 import { useCallback, useRef } from "react";
-import { useConsumerDesignStore, type SavedProjectSummary } from "@/app/store";
+import { useConsumerDesignStore, type DesignBriefResult, type SavedProjectSummary } from "@/app/store";
 import { getAuthToken, authJsonHeaders } from "@/lib/authApi";
 
 const API_BASE = "/api/vista/projects";
+
+export type ShareStatus = {
+  enabled: boolean;
+  share_url: string | null;
+  share_enabled_at: string | null;
+};
+
+export type PersistApiError = {
+  status?: number;
+  message: string;
+};
+
+export type CreateProjectResult =
+  | { ok: true; id: string }
+  | { ok: false; error: PersistApiError };
+
+export type AddVersionResult =
+  | { ok: true; id: string }
+  | { ok: false; error: PersistApiError };
+
+async function readTruncatedResponseBody(res: Response): Promise<string> {
+  try {
+    const text = await res.text();
+    return text.replace(/\s+/g, " ").trim().slice(0, 500);
+  } catch {
+    return "";
+  }
+}
+
+function logPersistFailure(scope: string, status: number | undefined, body: string): void {
+  console.warn(`[vista:persist] ${scope} failed`, { status, body: body || "(empty)" });
+}
 
 export interface VistaProjectApi {
   createProject: (params: {
@@ -18,14 +50,15 @@ export interface VistaProjectApi {
     roomAnalysis?: Record<string, unknown> | null;
     roomGeometry?: Record<string, unknown> | null;
     preferences?: Record<string, unknown> | null;
-  }) => Promise<string | null>;
+  }) => Promise<CreateProjectResult>;
 
   addVersion: (params: {
+    projectId: string;
     base64: string;
     mimeType?: string;
     promptUsed?: string | null;
     feedback?: string | null;
-    designBrief?: Record<string, unknown> | null;
+    designBrief?: DesignBriefResult | Record<string, unknown> | null;
     productsUsed?: unknown[] | null;
     roomGeometry?: Record<string, unknown> | null;
     type?: "generated" | "edited" | "regenerated" | "phased" | "viewpoint";
@@ -33,7 +66,7 @@ export interface VistaProjectApi {
     angleIndex?: number;
     phase?: string | null;
     viewpointId?: string | null;
-  }) => Promise<string | null>;
+  }) => Promise<AddVersionResult>;
 
   addMessage: (params: {
     role: "user" | "assistant" | "system";
@@ -71,6 +104,9 @@ export interface VistaProjectApi {
   fetchProjectPreferences: (projectId: string) => Promise<Record<string, unknown>>;
   syncOrchestratorId: (orchestratorProjectId: string) => Promise<void>;
   loadProjects: (options?: { mode?: "quick_room" | "project" }) => Promise<void>;
+  getShareStatus: (projectId: string) => Promise<ShareStatus | null>;
+  enableShare: (projectId: string) => Promise<ShareStatus | null>;
+  disableShare: (projectId: string) => Promise<ShareStatus | null>;
   isAuthenticated: () => boolean;
 }
 
@@ -128,8 +164,10 @@ export function useProjectPersistence(): VistaProjectApi {
     roomAnalysis?: Record<string, unknown> | null;
     roomGeometry?: Record<string, unknown> | null;
     preferences?: Record<string, unknown> | null;
-  }): Promise<string | null> => {
-    if (!isAuthenticated()) return null;
+  }): Promise<CreateProjectResult> => {
+    if (!isAuthenticated()) {
+      return { ok: false, error: { message: "not authenticated" } };
+    }
 
     try {
       const body: Record<string, unknown> = { mode: params.mode };
@@ -153,25 +191,37 @@ export function useProjectPersistence(): VistaProjectApi {
         body: JSON.stringify(body),
       });
 
-      if (!res.ok) return null;
+      if (!res.ok) {
+        const responseBody = await readTruncatedResponseBody(res);
+        logPersistFailure("createProject", res.status, responseBody);
+        return {
+          ok: false,
+          error: { status: res.status, message: responseBody || res.statusText || "create failed" },
+        };
+      }
       const json = await res.json();
       const id = json.data?.id as string | undefined;
       if (id) {
         setCurrentProjectDbId(id);
         projectIdRef.current = id;
+        return { ok: true, id };
       }
-      return id ?? null;
-    } catch {
-      return null;
+      logPersistFailure("createProject", res.status, "missing id in response");
+      return { ok: false, error: { status: res.status, message: "missing id in response" } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "create failed";
+      logPersistFailure("createProject", undefined, message);
+      return { ok: false, error: { message } };
     }
   }, [isAuthenticated, setCurrentProjectDbId]);
 
   const addVersion = useCallback(async (params: {
+    projectId: string;
     base64: string;
     mimeType?: string;
     promptUsed?: string | null;
     feedback?: string | null;
-    designBrief?: Record<string, unknown> | null;
+    designBrief?: DesignBriefResult | Record<string, unknown> | null;
     productsUsed?: unknown[] | null;
     roomGeometry?: Record<string, unknown> | null;
     type?: "generated" | "edited" | "regenerated" | "phased" | "viewpoint";
@@ -179,9 +229,11 @@ export function useProjectPersistence(): VistaProjectApi {
     angleIndex?: number;
     phase?: string | null;
     viewpointId?: string | null;
-  }): Promise<string | null> => {
-    const pid = projectIdRef.current;
-    if (!pid || !isAuthenticated()) return null;
+  }): Promise<AddVersionResult> => {
+    const pid = params.projectId;
+    if (!pid || !isAuthenticated()) {
+      return { ok: false, error: { message: "missing project id or not authenticated" } };
+    }
 
     try {
       const body: Record<string, unknown> = { base64: params.base64 };
@@ -203,11 +255,25 @@ export function useProjectPersistence(): VistaProjectApi {
         body: JSON.stringify(body),
       });
 
-      if (!res.ok) return null;
+      if (!res.ok) {
+        const responseBody = await readTruncatedResponseBody(res);
+        logPersistFailure("addVersion", res.status, responseBody);
+        return {
+          ok: false,
+          error: { status: res.status, message: responseBody || res.statusText || "version failed" },
+        };
+      }
       const json = await res.json();
-      return (json.data?.id as string) ?? null;
-    } catch {
-      return null;
+      const id = (json.data?.id as string) ?? null;
+      if (!id) {
+        logPersistFailure("addVersion", res.status, "missing id in response");
+        return { ok: false, error: { status: res.status, message: "missing id in response" } };
+      }
+      return { ok: true, id };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "version failed";
+      logPersistFailure("addVersion", undefined, message);
+      return { ok: false, error: { message } };
     }
   }, [isAuthenticated]);
 
@@ -359,6 +425,54 @@ export function useProjectPersistence(): VistaProjectApi {
     }
   }, [isAuthenticated, patchProject]);
 
+  const parseShareStatus = (json: Record<string, unknown>): ShareStatus => ({
+    enabled: Boolean(json.enabled),
+    share_url: (json.share_url as string) ?? null,
+    share_enabled_at: (json.share_enabled_at as string) ?? null,
+  });
+
+  const getShareStatus = useCallback(async (projectId: string): Promise<ShareStatus | null> => {
+    if (!isAuthenticated()) return null;
+    try {
+      const res = await fetch(`${API_BASE}/${projectId}/share`, { headers: authJsonHeaders() });
+      if (!res.ok) return null;
+      const json = await res.json();
+      return parseShareStatus((json.data ?? {}) as Record<string, unknown>);
+    } catch {
+      return null;
+    }
+  }, [isAuthenticated]);
+
+  const enableShare = useCallback(async (projectId: string): Promise<ShareStatus | null> => {
+    if (!isAuthenticated()) return null;
+    try {
+      const res = await fetch(`${API_BASE}/${projectId}/share`, {
+        method: "POST",
+        headers: authJsonHeaders(),
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      return parseShareStatus((json.data ?? {}) as Record<string, unknown>);
+    } catch {
+      return null;
+    }
+  }, [isAuthenticated]);
+
+  const disableShare = useCallback(async (projectId: string): Promise<ShareStatus | null> => {
+    if (!isAuthenticated()) return null;
+    try {
+      const res = await fetch(`${API_BASE}/${projectId}/share`, {
+        method: "DELETE",
+        headers: authJsonHeaders(),
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      return parseShareStatus((json.data ?? {}) as Record<string, unknown>);
+    } catch {
+      return null;
+    }
+  }, [isAuthenticated]);
+
   return {
     createProject,
     addVersion,
@@ -374,6 +488,9 @@ export function useProjectPersistence(): VistaProjectApi {
     fetchProjectPreferences,
     syncOrchestratorId,
     loadProjects,
+    getShareStatus,
+    enableShare,
+    disableShare,
     isAuthenticated,
   };
 }

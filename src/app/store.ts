@@ -16,7 +16,7 @@ import type {
   UtilityEntryPoint,
   PhotoViewpoint,
 } from "@/lib/project/types";
-import { quickRoomNeedsMandatorySpatialClarification, type RoomAnalysis } from "@/lib/interiorDesignPrompts";
+import { quickRoomNeedsMandatorySpatialClarification, type RoomAnalysis, type RoomType } from "@/lib/interiorDesignPrompts";
 import type { RoomGeometry } from "@/lib/roomGeometryTypes";
 import type { DesignPhase } from "@/lib/phaseRouter";
 
@@ -299,7 +299,10 @@ interface ConsumerDesignState {
   /** Additional room angles for Quick Room mode (up to 3, alongside the primary image). */
   quickRoomExtraPhotos: Array<{ id: string; base64: string; mimeType: string }>;
 
-  /** Vision analysis for Quick Room — attached to `/api/interior-design/generate` as structured lock. */
+  /** User-selected room type for Quick Room catalog matching (replaces auto-analyze). */
+  selectedQuickRoomType: RoomType;
+
+  /** @deprecated Legacy analyze payload — hydrated from saved projects only. */
   quickRoomAnalysis: RoomAnalysis | null;
   quickRoomAnalyzing: boolean;
   quickRoomAnalyzeError: string | null;
@@ -312,6 +315,10 @@ interface ConsumerDesignState {
   designMode: "made" | "custom";
   /** Quick Room placement: full redesign vs place-only products. */
   placementMode: QuickRoomPlacementMode;
+  /** Quick Room shape ↔ creativity slider (0 = keep shape, 10 = creativity). */
+  shapeCreativity: number;
+  /** Quick Room UI: compose (upload/prompt) vs result (generated overlay). */
+  quickRoomView: "compose" | "result";
 
   generatedImageBase64: string | null;
   generatedImageMimeType: string | null;
@@ -446,6 +453,7 @@ interface ConsumerDesignState {
   setProjectUtilityEntryPoints: (points: UtilityEntryPoint[]) => void;
   setProjectDraftRooms: (rooms: DetectedRoom[]) => void;
   resetProject: () => void;
+  resetQuickRoom: () => void;
 
   setSearchQuery: (q: string) => void;
   setSearchResults: (results: MarketplaceProduct[]) => void;
@@ -468,11 +476,13 @@ interface ConsumerDesignState {
   setQuickRoomAnalyzing: (v: boolean) => void;
   setQuickRoomAnalyzeError: (error: string | null) => void;
   setQuickRoomFactsConfirmed: (v: boolean) => void;
-
+  setSelectedQuickRoomType: (roomType: RoomType) => void;
   setTextPrompt: (prompt: string) => void;
   setSelectedStyle: (style: string) => void;
   setDesignMode: (mode: "made" | "custom") => void;
   setPlacementMode: (mode: QuickRoomPlacementMode) => void;
+  setShapeCreativity: (level: number) => void;
+  setQuickRoomView: (view: "compose" | "result") => void;
   setGeneratedImage: (base64: string | null, mimeType: string | null) => void;
   setDesignBrief: (brief: DesignBriefResult | null) => void;
   setDesignHistory: (history: DesignVersion[]) => void;
@@ -548,6 +558,7 @@ const initialState = {
   roomImageBase64: null as string | null,
   roomImageMimeType: null as string | null,
   quickRoomExtraPhotos: [] as Array<{ id: string; base64: string; mimeType: string }>,
+  selectedQuickRoomType: "living room" as RoomType,
   quickRoomAnalysis: null as RoomAnalysis | null,
   quickRoomAnalyzing: false,
   quickRoomAnalyzeError: null as string | null,
@@ -556,6 +567,8 @@ const initialState = {
   selectedStyle: "modern",
   designMode: "custom" as "made" | "custom",
   placementMode: "redesign" as QuickRoomPlacementMode,
+  shapeCreativity: 5,
+  quickRoomView: "compose" as "compose" | "result",
   generatedImageBase64: null as string | null,
   generatedImageMimeType: null as string | null,
   designBrief: null as DesignBriefResult | null,
@@ -704,11 +717,15 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
   setQuickRoomAnalyzeError: (error) => set({ quickRoomAnalyzeError: error }),
 
   setQuickRoomFactsConfirmed: (v) => set({ quickRoomFactsConfirmed: v }),
+  setSelectedQuickRoomType: (roomType) => set({ selectedQuickRoomType: roomType }),
 
   setTextPrompt: (prompt) => set({ textPrompt: prompt }),
   setSelectedStyle: (style) => set({ selectedStyle: style }),
   setDesignMode: (mode) => set({ designMode: resolveDesignMode(mode) }),
   setPlacementMode: (mode) => set({ placementMode: mode }),
+  setShapeCreativity: (level) =>
+    set({ shapeCreativity: Math.max(0, Math.min(10, Math.round(level))) }),
+  setQuickRoomView: (view) => set({ quickRoomView: view }),
 
   setGeneratedImage: (base64, mimeType) =>
     set({ generatedImageBase64: base64, generatedImageMimeType: mimeType }),
@@ -827,6 +844,7 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
         usedScrapedProducts: [],
         inspirationProducts: [],
         styleInspirations: [],
+        quickRoomView: "compose",
       };
     }),
   setTokenBalance: (balance) => set({ tokenBalance: balance }),
@@ -858,6 +876,7 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
       generatedImageMimeType: null,
       designBrief: null,
       productLinks: [],
+      quickRoomView: "compose",
     }),
   setPhasedPhase: (phase) => set({ phasedCurrentPhase: phase, phasedStatus: "selecting", phasedRetryCount: 0, phasedError: null }),
   setPhasedStatus: (status) => set({ phasedStatus: status }),
@@ -1114,6 +1133,61 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
       projectAnalysisMessage: "",
       projectUtilityEntryPoints: [],
       projectDraftRooms: [],
+    });
+  },
+
+  resetQuickRoom: () => {
+    if (typeof window !== "undefined") {
+      clearSession();
+      void clearSessionBlobs();
+    }
+    set({
+      selectedProducts: initialState.selectedProducts,
+      roomImageBase64: initialState.roomImageBase64,
+      roomImageMimeType: initialState.roomImageMimeType,
+      quickRoomExtraPhotos: initialState.quickRoomExtraPhotos,
+      selectedQuickRoomType: initialState.selectedQuickRoomType,
+      quickRoomAnalysis: initialState.quickRoomAnalysis,
+      quickRoomAnalyzing: initialState.quickRoomAnalyzing,
+      quickRoomAnalyzeError: initialState.quickRoomAnalyzeError,
+      quickRoomFactsConfirmed: initialState.quickRoomFactsConfirmed,
+      textPrompt: initialState.textPrompt,
+      selectedStyle: initialState.selectedStyle,
+      designMode: initialState.designMode,
+      placementMode: initialState.placementMode,
+      shapeCreativity: initialState.shapeCreativity,
+      quickRoomView: initialState.quickRoomView,
+      generatedImageBase64: initialState.generatedImageBase64,
+      generatedImageMimeType: initialState.generatedImageMimeType,
+      designBrief: initialState.designBrief,
+      designHistory: initialState.designHistory,
+      lastRoomGeometry: initialState.lastRoomGeometry,
+      lastGeometryExtractionFailed: initialState.lastGeometryExtractionFailed,
+      isGenerating: initialState.isGenerating,
+      error: initialState.error,
+      productLinks: initialState.productLinks,
+      usedScrapedProducts: initialState.usedScrapedProducts,
+      technicalPlans: initialState.technicalPlans,
+      isGeneratingPlans: initialState.isGeneratingPlans,
+      approvedRooms: initialState.approvedRooms,
+      inspirationProducts: initialState.inspirationProducts,
+      styleInspirations: initialState.styleInspirations,
+      phasedDesignActive: initialState.phasedDesignActive,
+      phasedCurrentPhase: initialState.phasedCurrentPhase,
+      phasedStatus: initialState.phasedStatus,
+      phasedRetryCount: initialState.phasedRetryCount,
+      phase1Versions: initialState.phase1Versions,
+      phase1SelectedIndex: initialState.phase1SelectedIndex,
+      phase2Versions: initialState.phase2Versions,
+      phase2SelectedIndex: initialState.phase2SelectedIndex,
+      phase3Versions: initialState.phase3Versions,
+      phase3SelectedIndex: initialState.phase3SelectedIndex,
+      phasedAllProductLinks: initialState.phasedAllProductLinks,
+      phasedAllProductIds: initialState.phasedAllProductIds,
+      phasedFinalViews: initialState.phasedFinalViews,
+      viewpointTracks: initialState.viewpointTracks,
+      phasedError: initialState.phasedError,
+      currentProjectDbId: initialState.currentProjectDbId,
     });
   },
 

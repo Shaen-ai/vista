@@ -554,10 +554,15 @@ export async function renderApartmentStaging(input: {
   photoId?: string;
   width?: number;
   height?: number;
+  /** Override LoRA strength; Quick Room shell uses 1 for maximum structure lock. */
+  loraScale?: number;
 }): Promise<FalRenderResult> {
   ensureFalConfigured();
   const label = input.label ?? "apartment-staging";
-  const loraScale = num("VISTA_FAL_STAGING_LORA_SCALE", 0.8);
+  const loraScale =
+    typeof input.loraScale === "number" && input.loraScale > 0
+      ? input.loraScale
+      : num("VISTA_FAL_STAGING_LORA_SCALE", 0.8);
   const guidanceScale = num("VISTA_FAL_STAGING_GUIDANCE", 2.5);
 
   const { logFalCostEstimate } = await import("@/lib/project/projectStagingCost");
@@ -578,6 +583,12 @@ export async function renderApartmentStaging(input: {
     guidance_scale: guidanceScale,
     imageUrlHost: input.imageUrl.slice(0, 60),
   });
+
+  if (label.includes("quick-room")) {
+    console.info(
+      `[vista-pipeline][7·fal-render] ${label} · apartment-staging · prompt (${input.prompt.length} chars):\n${input.prompt}`,
+    );
+  }
 
   const result = await withRetry(
     () =>

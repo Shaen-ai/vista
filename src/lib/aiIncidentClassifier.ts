@@ -24,7 +24,7 @@ export function errorText(err: unknown): string {
 
 function inferProvider(text: string, status?: number): AiProvider {
   const t = text.toLowerCase();
-  if (/fal\.?ai|fal_key|fal render|fal storage|rendering service is temporarily unavailable/.test(t)) {
+  if (/fal\.?ai|fal_key|fal render|fal storage|rendering service is temporarily unavailable|fal nano-banana|fal validation failed/.test(t)) {
     return "fal";
   }
   if (/openai|gpt-|images\/edits|dall-e|chat\.completions/.test(t)) return "openai";
@@ -32,6 +32,12 @@ function inferProvider(text: string, status?: number): AiProvider {
   if (/gemini|google.?ai|generativelanguage|google_ai_api_key/.test(t)) return "gemini";
   if (status === 403 && /forbidden|rendering service/.test(t)) return "fal";
   return "unknown";
+}
+
+function isFalValidationError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const o = err as { name?: string; status?: number };
+  return o.name === "ValidationError" || o.status === 422;
 }
 
 const PROVIDER_AUTH_PATTERNS: RegExp[] = [
@@ -70,7 +76,9 @@ export function classifyAiError(err: unknown): AiIncidentClassification {
       ? (err as { error?: { type?: string } }).error?.type
       : undefined;
 
-  const provider = inferProvider(message, Number.isFinite(status) ? status : undefined);
+  const provider = isFalValidationError(err)
+    ? "fal"
+    : inferProvider(message, Number.isFinite(status) ? status : undefined);
 
   const isAuthByStatus = status === 401 || status === 403;
   const isAuthByType =

@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Folder, Plus, Trash2, Pencil, Clock, Layers, Home, Loader2 } from "lucide-react";
+import { Folder, Plus, Trash2, Pencil, Clock, Layers, Home, Loader2, Share2 } from "lucide-react";
 import { useConsumerDesignStore, type SavedProjectSummary } from "@/app/store";
 import { useProjectPersistence } from "@/hooks/useProjectPersistence";
 import { authJsonHeaders } from "@/lib/authApi";
 import { LANDING_MODE_IMAGES } from "@/lib/landingModeAssets";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
+import { ShareProjectModal } from "@/components/ShareProjectModal";
 
 type OrchestratorPreviewPayload = {
   previewUrl: string;
@@ -104,6 +105,7 @@ export function MyProjects({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [shareProjectId, setShareProjectId] = useState<string | null>(null);
   const [lazyPreviews, setLazyPreviews] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -118,10 +120,11 @@ export function MyProjects({
   }, [loadProjects, reloadMode, editorialLayout]);
 
   const effectiveFilter = modeFilter ?? filter;
-  const filtered =
+  const modeFiltered =
     effectiveFilter === "all"
       ? savedProjects
       : savedProjects.filter((p) => p.mode === effectiveFilter);
+  const filtered = modeFiltered;
 
   useEffect(() => {
     const needsBackfill = filtered.filter(
@@ -317,6 +320,19 @@ export function MyProjects({
           )}
 
           <div className={actionsClass}>
+            {project.mode === "quick_room" && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShareProjectId(project.id);
+                }}
+                className={actionBtnClass}
+                title={t("share.title")}
+              >
+                <Share2 size={14} />
+              </button>
+            )}
             <button
               type="button"
               onClick={(e) => {
@@ -368,6 +384,9 @@ export function MyProjects({
             <h3 className="text-sm font-medium text-[var(--foreground)] truncate">{project.title}</h3>
           )}
           <div className={editorial ? "cd-hub-card-meta" : "flex items-center gap-3 mt-1.5 text-xs text-[var(--muted-foreground)]"}>
+            {project.versionCount === 0 && !previewSrc && (
+              <span>{t("myProjects.draft")}</span>
+            )}
             <span>
               <Layers size={11} aria-hidden />
               {project.versionCount}{" "}
@@ -445,6 +464,7 @@ export function MyProjects({
 
   if (editorialLayout) {
     return (
+      <>
       <div className="cd-hub-section">
         <div className="cd-hub-toolbar">
           {filtered.length > 0 ? (
@@ -507,10 +527,19 @@ export function MyProjects({
           </div>
         )}
       </div>
+      {shareProjectId && (
+        <ShareProjectModal
+          projectId={shareProjectId}
+          open
+          onClose={() => setShareProjectId(null)}
+        />
+      )}
+      </>
     );
   }
 
   return (
+    <>
     <div className="w-full max-w-5xl mx-auto px-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
         <div className="flex items-center gap-3 min-w-0">
@@ -589,5 +618,13 @@ export function MyProjects({
         </div>
       )}
     </div>
+    {shareProjectId && (
+      <ShareProjectModal
+        projectId={shareProjectId}
+        open
+        onClose={() => setShareProjectId(null)}
+      />
+    )}
+    </>
   );
 }

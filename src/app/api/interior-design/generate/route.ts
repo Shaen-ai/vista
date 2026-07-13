@@ -5,7 +5,6 @@ import {
   buildCreativeDirectorPrompt,
   normalizeParsedDesignBrief,
   normalizeRoomAnalysisOpenings,
-  normalizeRoomTypeValue,
   type DesignStyleId,
   type RoomAnalysis,
   type DesignBrief,
@@ -21,6 +20,7 @@ import {
 } from "@/lib/consumerCatalog";
 import { buildGeminiProductVisualParts } from "@/lib/buildGeminiProductVisualParts";
 import { runWithLogContext } from "@/lib/logSink";
+import { withRequestUploadUser } from "@/lib/uploadUserContext";
 import { logClaudeRequest, logClaudeResponse } from "@/lib/logClaudeRequest";
 import { ANTHROPIC_BRIEF_MODEL } from "@/lib/anthropicModels";
 import {
@@ -30,7 +30,7 @@ import {
 } from "@/lib/scrapedAllowlist";
 import { withRetry } from "@/lib/aiRetry";
 import { checkTokensServer, consumeTokensServer } from "@/lib/serverVistaTokens";
-import { getAnthropicApiKey, getGoogleGenerativeAiApiKey } from "@/lib/serverAiKeys";
+import { getAnthropicApiKey, getFalKey, getGoogleGenerativeAiApiKey } from "@/lib/serverAiKeys";
 import { resolveRenderProvider } from "@/lib/roomImageRenderer";
 import { renderRoomRedesign } from "@/lib/falRoomRenderer";
 import { buildFalRedesignPrompt } from "@/lib/falPipelinePrompt";
@@ -93,7 +93,19 @@ import {
   parseStructuralLineMapFromForm,
   parseStyleInspirationImages,
 } from "./_lib/formParsers";
+import {
+  buildSyntheticQuickRoomAnalysis,
+  resolveQuickRoomType,
+} from "@/lib/quickRoom/syntheticRoomAnalysis";
 import { resolveQuickRenderModel } from "@/lib/quickRoom/quickRenderModel";
+import {
+  isQuickRoomGalleryEditRequest,
+  parseHasEditAnnotationFlag,
+} from "@/lib/quickRoom/quickRoomGalleryEditEligibility";
+import {
+  parsePriorDesignBriefFromForm,
+  stubGalleryEditBrief,
+} from "@/lib/quickRoom/galleryEditBrief";
 
 export const maxDuration = 180;
 
@@ -111,7 +123,9 @@ export function POST(request: NextRequest) {
   // Key all quick-room pipeline logs to one file for this request so the full,
   // untruncated transcript can be read back from `.vista-logs/`.
   const logId = `quick-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  return runWithLogContext(logId, () => handleQuickRoomPost(request));
+  return runWithLogContext(logId, () =>
+    withRequestUploadUser(request, () => handleQuickRoomPost(request)),
+  );
 }
 
 async function handleQuickRoomPost(request: NextRequest) {
@@ -136,9 +150,12 @@ async function handleQuickRoomPost(request: NextRequest) {
       ((formData.get("textPrompt") as string) || "").trim() || DEFAULT_QUICK_ROOM_PROMPT;
     const editContext = String(formData.get("editContext") ?? "").trim();
     const styleId = (formData.get("style") as DesignStyleId) || "modern";
+    const styleEntry = DESIGN_STYLES.find((s) => s.id === styleId);
+    const designStyleLabel = styleEntry?.label ?? styleId;
     const roomImage = formData.get("roomImage") as File | null;
     const extraRoomImages = formData.getAll("extraRoomImages") as File[];
     const roomAnalysisRaw = formData.get("roomAnalysis") as string | null;
+    const formRoomType = String(formData.get("roomType") ?? "").trim();
     const adminSlug =
       ((formData.get("adminSlug") as string) || "").trim() ||
       (process.env.INTERIOR_DESIGN_ADMIN_SLUG || "").trim() ||
@@ -165,21 +182,85 @@ async function handleQuickRoomPost(request: NextRequest) {
       styleInspirationCount: styleInspirations.length,
     });
 
-    const anthropicKey = getAnthropicApiKey();
-    const googleKey = getGoogleGenerativeAiApiKey();
-
     const tokenActionRaw = String(formData.get("tokenAction") ?? "generate").trim();
     const tokenAction =
       tokenActionRaw === "regenerate" || tokenActionRaw === "edit" ? tokenActionRaw : "generate";
+
+    const keepRoomShapeRaw = formData.get("keepRoomShape");
+    const keepRoomShape =
+      typeof keepRoomShapeRaw === "string" && keepRoomShapeRaw.trim() === "true";
+
+    const quickRoomGalleryEditRaw = String(formData.get("quickRoomGalleryEdit") ?? "").trim();
+    const editFeedback = String(formData.get("editFeedback") ?? "").trim();
+    const hasEditAnnotation = parseHasEditAnnotationFlag(formData.get("hasEditAnnotation"));
+    const isGalleryEdit = isQuickRoomGalleryEditRequest({
+      quickRoomGalleryEditRaw,
+      tokenAction,
+      editFeedback,
+      hasRoomImage: !!roomImage,
+    });
+
+    const tokenCheck = await checkTokensServer(tokenAction, request.headers);
+    timer.mark("token_check", { ok: tokenCheck.ok });
+    if (!tokenCheck.ok) {
+      return NextResponse.json(
+        {
+          error: tokenCheck.message,
+          balance: tokenCheck.balance,
+          required: tokenCheck.required,
+          debug: timer.finish(phase === "brief" ? "brief" : "full", { ok: false }),
+        },
+        { status: tokenCheck.status },
+      );
+    }
+
+    if (isGalleryEdit && phase === "brief") {
+      if (!getFalKey()) {
+        return NextResponse.json(
+          {
+            error: "Gallery edit requires FAL render. Configure FAL_KEY or use a different edit path.",
+            debug: timer.finish("brief", { ok: false, galleryEdit: true }),
+          },
+          { status: 503 },
+        );
+      }
+      const priorBrief = parsePriorDesignBriefFromForm(formData.get("priorDesignBrief"));
+      const brief = stubGalleryEditBrief(priorBrief);
+      timer.mark("gallery_edit_brief", { editFeedbackChars: editFeedback.length, hasEditAnnotation });
+      return NextResponse.json({
+        data: {
+          renderSession: {
+            brief,
+            selectedForGemini: [],
+            plannedCatalogIds: [],
+            scrapedInventoryExclusive: false,
+            designBoardProductIds,
+            adminSlug,
+            designStyleLabel,
+            isCustomMode,
+            placementMode,
+            renderEngine: resolveQuickRenderModel(),
+            renderMode: "gallery-edit",
+            editFeedback,
+            hasEditAnnotation,
+          } satisfies InteriorRenderSession,
+        },
+        debug: timer.finish("brief", {
+          ok: true,
+          galleryEdit: true,
+          hasEditAnnotation,
+        }),
+      });
+    }
+
+    const anthropicKey = getAnthropicApiKey();
+    const googleKey = getGoogleGenerativeAiApiKey();
 
     const roomGeometryRaw = formData.get("roomGeometry") as string | null;
     const geometryExtractionFailedRaw = formData.get("geometryExtractionFailed");
     const geometryExtractionFailed =
       typeof geometryExtractionFailedRaw === "string" &&
       geometryExtractionFailedRaw.trim() === "true";
-    const keepRoomShapeRaw = formData.get("keepRoomShape");
-    const keepRoomShape =
-      typeof keepRoomShapeRaw === "string" && keepRoomShapeRaw.trim() === "true";
 
     const structuralLineMap = parseStructuralLineMapFromForm(formData);
 
@@ -188,6 +269,8 @@ async function handleQuickRoomPost(request: NextRequest) {
       try {
         roomAnalysis = normalizeRoomAnalysisOpenings(JSON.parse(roomAnalysisRaw) as unknown);
       } catch { /* ignore */ }
+    } else if (formRoomType) {
+      roomAnalysis = buildSyntheticQuickRoomAnalysis(formRoomType);
     }
 
     let roomGeometry: RoomGeometry | null = null;
@@ -199,8 +282,7 @@ async function handleQuickRoomPost(request: NextRequest) {
       }
     }
 
-    const styleEntry = DESIGN_STYLES.find((s) => s.id === styleId);
-    const designStyleLabel = styleEntry?.label ?? styleId;
+    const styleDef = styleEntry ?? DESIGN_STYLES[0];
 
     let marketplaceNumericIds = designBoardProductIds;
     // The render phase resolves products from the saved renderSession, so the
@@ -227,20 +309,6 @@ async function handleQuickRoomPost(request: NextRequest) {
         "Design service keys missing",
       );
       return NextResponse.json(missing.body, { status: missing.status });
-    }
-
-    const tokenCheck = await checkTokensServer(tokenAction, request.headers);
-    timer.mark("token_check", { ok: tokenCheck.ok });
-    if (!tokenCheck.ok) {
-      return NextResponse.json(
-        {
-          error: tokenCheck.message,
-          balance: tokenCheck.balance,
-          required: tokenCheck.required,
-          debug: timer.finish(phase === "brief" ? "brief" : "full", { ok: false }),
-        },
-        { status: tokenCheck.status },
-      );
     }
 
     if (roomGeometry?.confidence === "low") {
@@ -302,7 +370,6 @@ async function handleQuickRoomPost(request: NextRequest) {
     // Not a separate toggle: vector-catalog resolution is used exactly when the request
     // runs in Armenia local scraped-exclusive mode (the only mode users actually hit).
     const useVectorCatalog = scrapedInventoryExclusive;
-    const styleDef = DESIGN_STYLES.find((s) => s.id === styleId) ?? DESIGN_STYLES[0];
 
     const pinnedDirectorBlock = await (async () => {
       const missingPinIds = designBoardProductIds.filter(
@@ -491,9 +558,8 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
     let vectorResolvedSlots: ResolvedCatalogSlot[] = [];
     const briefFunnel = new ProductFunnelTracer("brief");
 
-    const effectiveRoomType = normalizeRoomTypeValue(
-      brief.roomType || roomAnalysis?.room_type || "living room",
-    );
+    const effectiveRoomType = resolveQuickRoomType(formRoomType || null, roomAnalysis);
+    const windowCountForSlots = roomAnalysisRaw?.trim() ? roomAnalysis?.window_count : undefined;
 
     // Uploaded product photos are placed in the render directly (via
     // buildGeminiProductVisualParts userUploads) — they are never matched to
@@ -517,7 +583,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
     const catalogResolutionSlots = excludeSlotsCoveredByUploads(
       filterSlotsForRoomType(
         mergeRoomSlots({
-          template: getRoomSlotTemplate(effectiveRoomType, roomAnalysis?.window_count),
+          template: getRoomSlotTemplate(effectiveRoomType, windowCountForSlots),
           extras: claudeExtras,
         }),
         effectiveRoomType,

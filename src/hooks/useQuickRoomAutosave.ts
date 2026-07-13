@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import { useConsumerDesignStore } from "@/app/store";
+import { useConsumerDesignStore, type DesignBriefResult } from "@/app/store";
 import { useProjectPersistence } from "@/hooks/useProjectPersistence";
+import { compressDataUrl } from "@/lib/compressImageClient";
 import { styleInspirationsToPatchPayload } from "@/lib/inspirationPersistence";
 import {
   buildQuickRoomOptionsFromStore,
@@ -10,19 +11,33 @@ import {
 } from "@/lib/quickRoom/quickRoomPreferences";
 
 const DEBOUNCE_MS = 800;
+const VERSION_UPLOAD_MAX_EDGE = 1600;
+const VERSION_UPLOAD_QUALITY = 0.82;
+
+// Shared across hook instances so remounts / Strict Mode cannot double-POST create.
+let ensureProjectPromise: Promise<string | null> | null = null;
 
 export type PersistGeneratedVersionParams = {
   base64: string;
   mimeType?: string;
   prompt?: string | null;
   feedback?: string | null;
-  designBrief?: Record<string, unknown> | null;
+  designBrief?: DesignBriefResult | Record<string, unknown> | null;
   productsUsed?: unknown[] | null;
   roomGeometry?: Record<string, unknown> | null;
   type?: "generated" | "edited" | "regenerated" | "phased" | "viewpoint";
   phase?: string | null;
   viewpointId?: string | null;
 };
+
+export type PersistGeneratedVersionResult =
+  | { ok: true; versionId: string }
+  | {
+      ok: false;
+      reason: "not_authenticated" | "create_failed" | "version_failed";
+      status?: number;
+      message?: string;
+    };
 
 export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
   const enabled = options?.enabled ?? true;
@@ -41,9 +56,8 @@ export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
     loadProjects,
   } = useProjectPersistence();
 
-  const ensurePromiseRef = useRef<Promise<string | null> | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const syncingImagesRef = useRef(false);
+  const syncImagesPromiseRef = useRef<Promise<void> | null>(null);
   const lastSyncedRef = useRef({
     roomImage: "",
     extrasKey: "",
@@ -57,17 +71,20 @@ export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
     if (!isAuthenticated()) return null;
     const state = useConsumerDesignStore.getState();
     if (state.currentProjectDbId) return state.currentProjectDbId;
-    if (!state.roomImageBase64) return null;
 
-    if (ensurePromiseRef.current) return ensurePromiseRef.current;
+    if (ensureProjectPromise) return ensureProjectPromise;
 
-    ensurePromiseRef.current = (async () => {
-      const id = await createProject({
+    ensureProjectPromise = (async () => {
+      const created = await createProject({
         mode: "quick_room",
         title: state.textPrompt.trim().slice(0, 80) || "Untitled Design",
         style: state.selectedStyle,
-        roomImageBase64: state.roomImageBase64,
-        roomImageMime: state.roomImageMimeType ?? "image/jpeg",
+        ...(state.roomImageBase64
+          ? {
+              roomImageBase64: state.roomImageBase64,
+              roomImageMime: state.roomImageMimeType ?? "image/jpeg",
+            }
+          : {}),
         roomAnalysis: (state.quickRoomAnalysis ?? undefined) as Record<string, unknown> | undefined,
         roomGeometry: (state.lastRoomGeometry ?? undefined) as Record<string, unknown> | undefined,
         preferences: {
@@ -75,29 +92,48 @@ export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
           quickRoomOptions: buildQuickRoomOptionsFromStore(),
         },
       });
-      if (id) void loadProjects({ mode: "quick_room" });
-      return id;
+      if (!created.ok) {
+        console.warn("[vista:persist] create_failed", {
+          status: created.error.status,
+          message: created.error.message,
+        });
+        return null;
+      }
+      await loadProjects({ mode: "quick_room" });
+      return created.id;
     })();
 
     try {
-      return await ensurePromiseRef.current;
+      return await ensureProjectPromise;
     } finally {
-      ensurePromiseRef.current = null;
+      ensureProjectPromise = null;
     }
   }, [createProject, isAuthenticated, loadProjects]);
 
   const syncImages = useCallback(async () => {
-    if (!enabled || !isAuthenticated() || syncingImagesRef.current) return;
-    const state = useConsumerDesignStore.getState();
-    const projectId = state.currentProjectDbId ?? (await ensureProject());
-    if (!projectId) return;
+    if (!enabled || !isAuthenticated()) return;
+    if (syncImagesPromiseRef.current) {
+      await syncImagesPromiseRef.current;
+      return;
+    }
 
-    syncingImagesRef.current = true;
-    try {
+    const run = (async () => {
+      const state = useConsumerDesignStore.getState();
+
+      let projectId = state.currentProjectDbId;
+      if (!projectId) {
+        if (!state.roomImageBase64) return;
+        projectId = await ensureProject();
+        if (!projectId) return;
+      }
+
       const roomKey = state.roomImageBase64 ?? "";
       if (roomKey && roomKey !== lastSyncedRef.current.roomImage) {
-        await saveRoomImage(projectId, roomKey, state.roomImageMimeType ?? "image/jpeg");
-        lastSyncedRef.current.roomImage = roomKey;
+        const ok = await saveRoomImage(projectId, roomKey, state.roomImageMimeType ?? "image/jpeg");
+        if (ok) {
+          lastSyncedRef.current.roomImage = roomKey;
+          void loadProjects({ mode: "quick_room" });
+        }
       }
 
       const extrasKey = JSON.stringify(state.quickRoomExtraPhotos.map((p) => `${p.id}:${p.base64.slice(0, 32)}`));
@@ -135,13 +171,21 @@ export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
         await saveInspirationImages(projectId, stylePayload);
         lastSyncedRef.current.styleKey = styleKey;
       }
+    })();
+
+    syncImagesPromiseRef.current = run;
+    try {
+      await run;
     } finally {
-      syncingImagesRef.current = false;
+      if (syncImagesPromiseRef.current === run) {
+        syncImagesPromiseRef.current = null;
+      }
     }
   }, [
     enabled,
     ensureProject,
     isAuthenticated,
+    loadProjects,
     saveInspirationImages,
     savePlacementImages,
     saveRoomExtras,
@@ -151,7 +195,7 @@ export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
   const syncPreferences = useCallback(async () => {
     if (!enabled || !isAuthenticated()) return;
     const state = useConsumerDesignStore.getState();
-    const projectId = state.currentProjectDbId ?? (await ensureProject());
+    const projectId = state.currentProjectDbId;
     if (!projectId) return;
 
     const optionsKey = JSON.stringify({
@@ -175,21 +219,46 @@ export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
     }
 
     lastSyncedRef.current.optionsKey = optionsKey;
-  }, [enabled, ensureProject, isAuthenticated, patchProject, saveQuickRoomPreferences]);
+  }, [enabled, isAuthenticated, patchProject, saveQuickRoomPreferences]);
 
   const persistGeneratedVersion = useCallback(async (
     params: PersistGeneratedVersionParams,
-  ): Promise<string | null> => {
-    if (!isAuthenticated()) return null;
+  ): Promise<PersistGeneratedVersionResult> => {
+    if (!isAuthenticated()) return { ok: false, reason: "not_authenticated" };
     const projectId = await ensureProject();
-    if (!projectId) return null;
+    if (!projectId) {
+      return { ok: false, reason: "create_failed" };
+    }
 
     await syncImages();
     await syncPreferences();
 
-    const versionId = await addVersion({
-      base64: params.base64,
-      mimeType: params.mimeType ?? "image/png",
+    const state = useConsumerDesignStore.getState();
+    const projectPatch: Record<string, unknown> = {};
+    if (params.roomGeometry) projectPatch.room_geometry = params.roomGeometry;
+    if (state.quickRoomAnalysis) projectPatch.room_analysis = state.quickRoomAnalysis;
+    if (Object.keys(projectPatch).length > 0) {
+      await patchProject(projectId, projectPatch);
+    }
+
+    let uploadBase64 = params.base64;
+    let uploadMime = params.mimeType ?? "image/png";
+    try {
+      const dataUrl = `data:${uploadMime};base64,${params.base64}`;
+      const compressed = await compressDataUrl(dataUrl, {
+        maxEdge: VERSION_UPLOAD_MAX_EDGE,
+        quality: VERSION_UPLOAD_QUALITY,
+      });
+      uploadBase64 = compressed.base64;
+      uploadMime = compressed.mimeType;
+    } catch (compressErr) {
+      console.warn("[vista:persist] version compress failed, uploading original", compressErr);
+    }
+
+    const versionResult = await addVersion({
+      projectId,
+      base64: uploadBase64,
+      mimeType: uploadMime,
       promptUsed: params.prompt ?? null,
       feedback: params.feedback ?? null,
       designBrief: params.designBrief ?? null,
@@ -200,18 +269,31 @@ export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
       viewpointId: params.viewpointId ?? null,
     });
 
+    if (!versionResult.ok) {
+      console.warn("[vista:persist] version_failed", {
+        status: versionResult.error.status,
+        message: versionResult.error.message,
+      });
+      return {
+        ok: false,
+        reason: "version_failed",
+        status: versionResult.error.status,
+        message: versionResult.error.message,
+      };
+    }
+
     if (params.prompt?.trim()) {
-      void addMessage({
+      await addMessage({
         role: "user",
         contentType: "text",
         text: params.prompt.trim(),
-        versionId: versionId ?? undefined,
+        versionId: versionResult.id,
       });
     }
 
-    void loadProjects({ mode: "quick_room" });
-    return versionId;
-  }, [addMessage, addVersion, ensureProject, isAuthenticated, loadProjects, syncImages, syncPreferences]);
+    await loadProjects({ mode: "quick_room" });
+    return { ok: true, versionId: versionResult.id };
+  }, [addMessage, addVersion, ensureProject, isAuthenticated, loadProjects, patchProject, syncImages, syncPreferences]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -240,13 +322,17 @@ export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
         || state.phase3SelectedIndex !== prev.phase3SelectedIndex;
 
       if (imageChanged) {
-        void ensureProject().then(() => syncImages());
+        if (state.currentProjectDbId) {
+          void syncImages();
+        } else if (state.roomImageBase64) {
+          void ensureProject().then(() => syncImages());
+        }
       }
 
-      if (prefsChanged) {
+      if (prefsChanged && state.currentProjectDbId) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(() => {
-          void ensureProject().then(() => syncPreferences());
+          void syncPreferences();
         }, DEBOUNCE_MS);
       }
 

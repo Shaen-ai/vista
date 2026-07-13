@@ -20,6 +20,24 @@ test("classifyAiError treats generic failures as unexpected", () => {
   assert.equal(result.category, "unexpected");
 });
 
+test("classifyAiError detects FAL ValidationError as fal provider", () => {
+  const err = Object.assign(new Error("Unprocessable Entity"), {
+    name: "ValidationError",
+    status: 422,
+  });
+  const result = classifyAiError(err);
+  assert.equal(result.category, "unexpected");
+  assert.equal(result.provider, "fal");
+});
+
+test("classifyAiError detects rewritten FAL validation message as fal provider", () => {
+  const result = classifyAiError(
+    new Error("FAL nano-banana-pro edit validation failed (422): image_urls: field required"),
+  );
+  assert.equal(result.category, "unexpected");
+  assert.equal(result.provider, "fal");
+});
+
 test("AI_SERVICE_CONFIG_ERROR_CODE is stable", () => {
   assert.equal(AI_SERVICE_CONFIG_ERROR_CODE, "ai_service_unavailable");
 });

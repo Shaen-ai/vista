@@ -1312,7 +1312,7 @@ function ProjectDesignBriefStep({
       if (isPersistenceAuthenticated()) {
         if (!useConsumerDesignStore.getState().currentProjectDbId) {
           const snap = useConsumerDesignStore.getState();
-          await createProjectDb({
+          const created = await createProjectDb({
             mode: "project",
             title: preferences.style
               ? stylePresetLabel(preferences.style)
@@ -1325,7 +1325,9 @@ function ProjectDesignBriefStep({
               orchestratorProjectId: projectId,
             },
           });
-          await loadProjects({ mode: "project" });
+          if (created.ok) {
+            await loadProjects({ mode: "project" });
+          }
         }
         void syncOrchestratorId(projectId);
       }
@@ -3423,13 +3425,16 @@ function ProjectDesignHubStep({
           const summary = store.savedProjects.find((p) => p.id === dbId);
           const primaryRender = roomResult.renders[0];
           if (dbId && summary && summary.versionCount === 0 && primaryRender?.base64) {
-            await addVersion({
+            const versionResult = await addVersion({
+              projectId: dbId,
               base64: primaryRender.base64,
               mimeType: primaryRender.mimeType,
               roomId,
               angleIndex: primaryRender.angleIndex ?? 0,
             });
-            void loadProjects({ mode: "project" });
+            if (versionResult.ok) {
+              void loadProjects({ mode: "project" });
+            }
           } else if (dbId && !summary?.coverImageUrl && !primaryRender?.base64 && store.floorPlanBase64) {
             void patchProject(dbId, {
               floor_plan_base64: store.floorPlanBase64,

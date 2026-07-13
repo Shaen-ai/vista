@@ -10,6 +10,8 @@ import type { UserPreferences } from "@/lib/project/types";
 import { parseUserPreferences } from "@/lib/project/types";
 import { optimizeImageBufferForAiWithBuffer } from "@/lib/optimizeImageForAi";
 import { LOCAL_SCRAPED_CATALOG_EMPTY_CODE } from "@/lib/scrapedAllowlist";
+import { createSseEmitter, isStreamClosedError } from "@/lib/sseStream";
+import { withRequestUploadUser } from "@/lib/uploadUserContext";
 
 export const maxDuration = 300;
 
@@ -90,6 +92,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  return withRequestUploadUser(request, async () => {
   const { id } = await params;
 
   const project = await getProject(id);
@@ -123,17 +126,9 @@ export async function POST(
   const inspirationUploads = await parseInspirationUploads(formData);
   const pinnedProductIds = parseNumericIdList(formData.get("pinnedProductIds"));
 
-  const encoder = new TextEncoder();
-
   const stream = new ReadableStream({
     async start(controller) {
-      function send(event: unknown) {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-        } catch {
-          /* client disconnected */
-        }
-      }
+      const { emit: send, close } = createSseEmitter(controller);
 
       try {
         await createProjectConcept(
@@ -142,19 +137,23 @@ export async function POST(
           (event) => send(event),
         );
       } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : "Design concept creation failed";
-        if (msg === LOCAL_SCRAPED_CATALOG_EMPTY_CODE) {
-          send({
-            phase: "error",
-            message:
-              "No products available in our catalog for this project. Try adjusting preferences or add inspiration products.",
-            data: { code: LOCAL_SCRAPED_CATALOG_EMPTY_CODE },
-          });
+        if (isStreamClosedError(error)) {
+          // Client disconnected mid-concept.
         } else {
-          send({ phase: "error", message: msg });
+          const msg = error instanceof Error ? error.message : "Design concept creation failed";
+          if (msg === LOCAL_SCRAPED_CATALOG_EMPTY_CODE) {
+            send({
+              phase: "error",
+              message:
+                "No products available in our catalog for this project. Try adjusting preferences or add inspiration products.",
+              data: { code: LOCAL_SCRAPED_CATALOG_EMPTY_CODE },
+            });
+          } else {
+            send({ phase: "error", message: msg });
+          }
         }
       } finally {
-        controller.close();
+        close();
       }
     },
   });
@@ -166,5 +165,6 @@ export async function POST(
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     },
+  });
   });
 }

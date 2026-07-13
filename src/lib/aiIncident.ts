@@ -14,6 +14,7 @@ import {
   type AiIncidentCategory,
   type AiProvider,
 } from "@/lib/aiIncidentClassifier";
+import { isStreamClosedError } from "@/lib/sseStream";
 
 export type { AiIncidentCategory, AiProvider };
 export { classifyAiError, isOverloadedAiError };
@@ -85,6 +86,14 @@ export async function buildAiIncidentResponse(
   err: unknown,
   context: { route: string; roomType?: string; phase?: string },
 ): Promise<AiIncidentResponse> {
+  // Client disconnect / cancelled SSE — not an AI failure; do not page support.
+  if (isStreamClosedError(err)) {
+    return {
+      body: { error: PUBLIC_AI_GENERIC_ERROR },
+      status: 500,
+    };
+  }
+
   const classification = classifyAiError(err);
   const message = sanitizeIncidentMessage(errorText(err));
 
@@ -113,7 +122,8 @@ export async function buildAiIncidentResponse(
 export async function buildAiIncidentSseEvent(
   err: unknown,
   context: { route: string; roomType?: string; phase?: string },
-): Promise<{ phase: "error"; message: string; code?: string }> {
+): Promise<{ phase: "error"; message: string; code?: string } | null> {
+  if (isStreamClosedError(err)) return null;
   const incident = await buildAiIncidentResponse(err, context);
   return {
     phase: "error",

@@ -70,6 +70,8 @@ export async function generateMetadata(): Promise<Metadata> {
 export function generateViewport(): Viewport {
   return {
     themeColor: VISTA_THEME_COLOR,
+    // Shrink the layout when the mobile keyboard opens so bottom inputs stay visible.
+    interactiveWidget: "resizes-content",
   };
 }
 

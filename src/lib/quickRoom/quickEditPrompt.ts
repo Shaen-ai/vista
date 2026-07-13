@@ -1,29 +1,50 @@
 import type { DesignBrief } from "@/lib/interiorDesignPrompts";
 import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
-import { buildPreserveScaffold } from "@/lib/project/editPromptAssembly";
+import type { CreativeMode, PreserveMode } from "@/lib/quickRoom/shapeCreativity";
 
 /**
- * Prompt assembly for the Quick Room nano-banana-pro edit pipeline. Mirrors
- * the Full Project scaffold (editPromptAssembly.ts) but the CHANGE block
- * comes from the Quick design brief, and the image roles cover product
- * reference sheets — Quick Room's core feature that Full Project lacks.
+ * Short prompt assembly for Quick Room staging-shell → nano-banana furnish.
+ * Products and style inspiration are image-only; text stays compact.
  */
 
-/** Total prompt char budget for nano-banana-pro (attention degrades beyond this). */
-const PROMPT_CHAR_CAP = 7000;
-const BRIEF_FULL_PROMPT_SLICE = 2000;
-export const MERCHANT_APPENDIX_CAP = 3800;
+/** Hard cap for nano-banana-pro — attention degrades beyond ~1k chars. */
+export const PROMPT_CHAR_CAP = 1200;
+const SUBJECT_SLICE = 220;
+const ARRANGEMENT_SLICE = 180;
+const EDIT_CONTEXT_SLICE = 160;
+
+const PRESERVE_VERY_STRONG =
+  "PRESERVE: Keep the exact room shape from the FIRST image — all walls, ceiling, floor, doors, windows, columns, and camera angle unchanged. Do not alter room geometry, openings, or perspective. Change only interior: furniture, finishes, lighting, and decor.";
+
+const PRESERVE_STRONG =
+  "PRESERVE: Keep the exact room shape from the FIRST image — all walls, ceiling, floor, doors, windows, columns, and camera angle unchanged. Change only interior: furniture, finishes, lighting, and decor.";
+
+const PRESERVE_SOFT =
+  "PRESERVE: Keep the room shape, walls, openings, ceiling, floor, and camera angle from the FIRST image. Change only furniture, finishes, lighting, and decor.";
+
+export function buildPreserveBlock(mode: PreserveMode): string {
+  switch (mode) {
+    case "veryStrong":
+      return PRESERVE_VERY_STRONG;
+    case "soft":
+      return PRESERVE_SOFT;
+    default:
+      return PRESERVE_STRONG;
+  }
+}
 
 export interface QuickRoomImageRolesInput {
   collageSheetCount: number;
   hasStyleInspiration: boolean;
-  hasStructuralMarkup: boolean;
+  /** When false, first image is the original room photo (levels 9–10). */
+  runShell?: boolean;
 }
 
 export function buildQuickRoomImageRoles(opts: QuickRoomImageRolesInput): string {
-  const parts: string[] = [
-    "IMAGE ROLES: The FIRST image is the real photo of this room — it is the ONLY authority for geometry: walls, ceiling, floor, door and window openings, camera angle, and composition.",
-  ];
+  const firstImageRole = opts.runShell === false
+    ? "The FIRST image is the original room photo — sole authority for walls, openings, ceiling, floor, and camera."
+    : "The FIRST image is the staged empty room — sole authority for walls, openings, ceiling, floor, and camera.";
+  const parts: string[] = [`IMAGE ROLES: ${firstImageRole}`];
   let nextIndex = 2;
   if (opts.collageSheetCount > 0) {
     const last = nextIndex + opts.collageSheetCount - 1;
@@ -32,80 +53,101 @@ export function buildQuickRoomImageRoles(opts: QuickRoomImageRolesInput): string
         ? `Image ${nextIndex} is a PRODUCT REFERENCE SHEET`
         : `Images ${nextIndex}-${last} are PRODUCT REFERENCE SHEETS`;
     parts.push(
-      `${range} — collages of real store products the user wants placed in the design. Place these exact products (their true shape, color, material, and proportions) as furniture inside the room. NEVER render a collage sheet itself, its grid, labels, or backgrounds; each cell is only a reference for one product.`,
+      `${range} — place these exact products inside the room. Never render a collage grid or sheet in the output.`,
     );
     nextIndex = last + 1;
   }
   if (opts.hasStyleInspiration) {
     parts.push(
-      `Image ${nextIndex} is the user's STYLE INSPIRATION photo — copy its color palette, materials, decor density, textures, and lighting mood. Do NOT copy its room shape, layout, openings, or camera; do NOT copy specific furniture from it.`,
-    );
-    nextIndex += 1;
-  }
-  if (opts.hasStructuralMarkup) {
-    parts.push(
-      `The LAST image is the same room photo with GOLD LINES tracing immovable structural boundaries the user marked (floor-wall edges, wall-ceiling edges, columns, corners). Those boundaries are frozen — keep every marked edge exactly where it is. Never draw gold lines in the output.`,
+      `Image ${nextIndex} is STYLE INSPIRATION — copy palette, materials, and lighting mood only; not room shape or layout.`,
     );
   }
-  parts.push("Geometry comes exclusively from the first image.");
   return parts.join(" ");
 }
 
+/** Human-readable role per image_urls index for the banana furnish pass. */
+export function buildQuickRoomBananaImageRoles(opts: {
+  collageSheetCount: number;
+  hasStyleInspiration: boolean;
+  runShell?: boolean;
+}): string[] {
+  const firstRole = opts.runShell === false
+    ? "0: original room photo — geometry authority"
+    : "0: staged shell — geometry authority (apartment-staging output)";
+  const roles = [firstRole];
+  for (let i = 0; i < opts.collageSheetCount; i++) {
+    roles.push(`${i + 1}: product reference sheet ${i + 1}`);
+  }
+  if (opts.hasStyleInspiration) {
+    roles.push(`${roles.length}: style inspiration (palette/mood only)`);
+  }
+  return roles;
+}
+
 export interface QuickRoomEditInstructionInput {
-  brief: Pick<DesignBrief, "subject" | "arrangement" | "fullPrompt" | "doorDesign">;
+  brief: Pick<DesignBrief, "subject" | "arrangement">;
   designStyleLabel: string;
-  openingBoxCounts?: { windows: number; doors: number };
   imageRoles: string;
   productIntroText?: string;
   productCloseText?: string;
-  merchantAppendix?: string;
   editContext?: string;
   placementMode?: QuickRoomPlacementMode;
+  preserveMode?: PreserveMode;
+  creativeMode?: CreativeMode;
 }
 
 const PLACE_ONLY_CHANGE =
-  "CHANGE: Place only the user-provided product(s) into this exact room. Keep walls, floor, ceiling, lighting, camera, and all existing furniture/decor unchanged except where a provided product replaces a similar item.";
+  "CHANGE: Place only the user-provided product(s). Keep walls, floor, ceiling, camera, and existing furniture unchanged except where a product replaces a similar item.";
+
+function buildRedesignChange(
+  designStyleLabel: string,
+  creativeMode: CreativeMode,
+): string {
+  const style = designStyleLabel.trim() || "modern";
+  switch (creativeMode) {
+    case "moreCreative":
+      return `CHANGE: Create a bold, imaginative ${style} interior with distinctive furniture, finishes, and decor while honoring the room structure.`;
+    case "creative":
+      return `CHANGE: Design a fresh, expressive ${style} interior with creative furniture choices, finishes, and decor.`;
+    default:
+      return `CHANGE: Furnish this room as a photorealistic ${style} interior.`;
+  }
+}
 
 export function buildQuickRoomEditInstruction(input: QuickRoomEditInstructionInput): string {
-  const preserve = buildPreserveScaffold(input.openingBoxCounts);
   const placeOnly = input.placementMode === "placeOnly";
-
-  const doorDesign = typeof input.brief.doorDesign === "string" ? input.brief.doorDesign.trim() : "";
+  const preserveMode = input.preserveMode ?? "strong";
+  const creativeMode = input.creativeMode ?? "none";
   const changeParts = [
     placeOnly
       ? PLACE_ONLY_CHANGE
-      : `CHANGE: Redesign this room as a photorealistic ${input.designStyleLabel} interior.`,
-    input.brief.subject?.trim() ? `Design: ${input.brief.subject.trim()}` : "",
-    input.brief.arrangement?.trim() ? `Furniture arrangement: ${input.brief.arrangement.trim()}` : "",
-    !placeOnly && doorDesign ? `Door styling: ${doorDesign}` : "",
-    input.editContext?.trim() ? `User adjustments: ${input.editContext.trim()}` : "",
+      : buildRedesignChange(input.designStyleLabel, creativeMode),
+    input.brief.subject?.trim()
+      ? `Focus: ${input.brief.subject.trim().slice(0, SUBJECT_SLICE)}`
+      : "",
+    input.brief.arrangement?.trim()
+      ? `Layout: ${input.brief.arrangement.trim().slice(0, ARRANGEMENT_SLICE)}`
+      : "",
+    input.editContext?.trim()
+      ? `Adjustments: ${input.editContext.trim().slice(0, EDIT_CONTEXT_SLICE)}`
+      : "",
   ].filter(Boolean);
 
   const productIntro = input.productIntroText?.trim() ?? "";
   const productClose = input.productCloseText?.trim() ?? "";
-  const appendix = input.merchantAppendix?.trim().slice(0, MERCHANT_APPENDIX_CAP) ?? "";
-  const designDirection = input.brief.fullPrompt?.trim()
-    ? placeOnly
-      ? `Placement direction: ${input.brief.fullPrompt.trim().slice(0, BRIEF_FULL_PROMPT_SLICE)}`
-      : `Design direction: ${input.brief.fullPrompt.trim().slice(0, BRIEF_FULL_PROMPT_SLICE)}`
-    : "";
 
-  // Geometry lock, product placement mandates, and the core CHANGE lines are
-  // never trimmed. Under budget pressure the long free-form brief text and the
-  // merchant appendix go first (in that priority order below).
-  const required = [
-    [input.imageRoles, preserve, ...changeParts].filter(Boolean).join(" "),
-    productIntro,
-    productClose,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const core = [input.imageRoles, buildPreserveBlock(preserveMode), ...changeParts].filter(Boolean).join(" ");
 
-  let prompt = required;
-  for (const block of [designDirection, appendix]) {
+  let prompt = core;
+  for (const block of [productIntro, productClose]) {
     if (!block) continue;
-    if (prompt.length + block.length + 2 > PROMPT_CHAR_CAP) continue;
-    prompt = `${prompt}\n\n${block}`;
+    const sep = prompt.length > 0 ? "\n\n" : "";
+    if (prompt.length + sep.length + block.length > PROMPT_CHAR_CAP) continue;
+    prompt = `${prompt}${sep}${block}`;
+  }
+
+  if (prompt.length > PROMPT_CHAR_CAP) {
+    prompt = prompt.slice(0, PROMPT_CHAR_CAP - 1).trimEnd() + "…";
   }
   return prompt;
 }

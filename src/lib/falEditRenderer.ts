@@ -1,7 +1,7 @@
 import "server-only";
 
 import sharp from "sharp";
-import { fal } from "@fal-ai/client";
+import { fal, ValidationError } from "@fal-ai/client";
 import { withRetry } from "@/lib/aiRetry";
 import { nearestEditAspectRatio, type EditAspectRatio } from "@/lib/editAspectRatio";
 import { uploadPublicImage, ensureFalConfigured } from "@/lib/falStorage";
@@ -102,38 +102,66 @@ export async function renderEditStaging(input: EditStagingInput): Promise<EditSt
     resolution,
     aspectRatio: aspectRatio ?? "auto",
     promptChars: input.prompt.length,
-    promptPreview: input.prompt.slice(0, 200),
   });
 
-  const result = await withRetry(
-    () =>
-      pipelineTimed(
-        "FAL_RENDER",
-        "nano-banana edit subscribe",
-        () =>
-          fal.subscribe(FAL_NANO_BANANA_EDIT_ENDPOINT, {
-            input: {
-              prompt: input.prompt,
-              image_urls: imageUrls,
-              resolution,
-              ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
-              num_images: 1,
-              output_format: "jpeg",
+  if (label.startsWith("quick-room")) {
+    console.info(
+      `[vista-pipeline][7·fal-render] ${label} · nano-banana-pro edit · prompt (${input.prompt.length} chars):\n${input.prompt}`,
+    );
+  }
+
+  let result: Awaited<ReturnType<typeof fal.subscribe>>;
+  try {
+    result = await withRetry(
+      () =>
+        pipelineTimed(
+          "FAL_RENDER",
+          "nano-banana edit subscribe",
+          () =>
+            fal.subscribe(FAL_NANO_BANANA_EDIT_ENDPOINT, {
+              input: {
+                prompt: input.prompt,
+                image_urls: imageUrls,
+                resolution,
+                ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+                num_images: 1,
+                output_format: "jpeg",
+              },
+              logs: false,
+            }),
+          {
+            meta: {
+              projectId: input.projectId,
+              roomId: input.roomId,
+              photoId: input.photoId,
+              label,
+              endpoint: FAL_NANO_BANANA_EDIT_ENDPOINT,
             },
-            logs: false,
-          }),
-        {
-          meta: {
-            projectId: input.projectId,
-            roomId: input.roomId,
-            photoId: input.photoId,
-            label,
-            endpoint: FAL_NANO_BANANA_EDIT_ENDPOINT,
           },
+        ),
+      "nano-banana-pro edit",
+    );
+  } catch (err) {
+    if (err instanceof ValidationError) {
+      pipelineLog(
+        "FAL_RENDER",
+        "nano-banana validation error",
+        {
+          label,
+          endpoint: FAL_NANO_BANANA_EDIT_ENDPOINT,
+          fieldErrors: err.fieldErrors,
         },
-      ),
-    "nano-banana-pro edit",
-  );
+        "error",
+      );
+      const detail = err.fieldErrors
+        .map((fe) => `${fe.loc.join(".")}: ${fe.msg}`)
+        .join("; ");
+      throw new Error(
+        `FAL nano-banana-pro edit validation failed (422)${detail ? `: ${detail}` : ""}`,
+      );
+    }
+    throw err;
+  }
 
   const images = (result.data as { images?: Array<{ url?: string }> })?.images ?? [];
   const { recordFalUsage } = await import("@/lib/aiSpend");

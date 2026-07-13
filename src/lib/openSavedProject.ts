@@ -8,6 +8,8 @@ export function prepareOpenSavedProject(mode: "quick_room" | "project"): void {
     store.setGeneratedImage(null, null);
     store.setDesignBrief(null);
     store.setProductLinks([]);
+  } else {
+    store.setQuickRoomView("compose");
   }
   store.setError(null);
 }
@@ -25,7 +27,7 @@ export async function openSavedProject(
   }
 
   const ok = await loadAndHydrateProject(projectId);
-  if (ok && mode === "project") {
+  if (ok) {
     markJustHydratedFromHub();
   }
   return ok;

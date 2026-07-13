@@ -15,10 +15,13 @@ import {
   isOverloadedAiError,
   reportOverloadedIncident,
 } from "@/lib/aiIncident";
+import { createSseEmitter, isStreamClosedError } from "@/lib/sseStream";
+import { withRequestUploadUser } from "@/lib/uploadUserContext";
 
 export const maxDuration = 900;
 
 export async function POST(request: NextRequest) {
+  return withRequestUploadUser(request, async () => {
   const formData = await request.formData();
 
   const floorPlanFile = formData.get("floorPlan") as File | null;
@@ -67,17 +70,9 @@ export async function POST(request: NextRequest) {
 
   const analysisSource = manualAnalysis ? "manual" : "ai-vision";
 
-  const encoder = new TextEncoder();
-
   const stream = new ReadableStream({
     async start(controller) {
-      function send(event: unknown) {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-        } catch {
-          /* client disconnected */
-        }
-      }
+      const { emit: send, close } = createSseEmitter(controller);
 
       try {
         pipelineLog("UPLOAD", "create-stream analysis source", { source: analysisSource });
@@ -91,19 +86,23 @@ export async function POST(request: NextRequest) {
           (event) => send(event),
         );
       } catch (error: unknown) {
-        console.error("[create-stream] floor plan analysis failed", error);
-        if (isOverloadedAiError(error)) {
-          reportOverloadedIncident("/api/project/create-stream");
-          send({
-            phase: "error",
-            message: "The service is temporarily overloaded. Please wait a moment and try again.",
-          });
+        if (isStreamClosedError(error)) {
+          // Client disconnected mid-analysis.
         } else {
-          const event = await buildAiIncidentSseEvent(error, { route: "/api/project/create-stream" });
-          send(event);
+          console.error("[create-stream] floor plan analysis failed", error);
+          if (isOverloadedAiError(error)) {
+            reportOverloadedIncident("/api/project/create-stream");
+            send({
+              phase: "error",
+              message: "The service is temporarily overloaded. Please wait a moment and try again.",
+            });
+          } else {
+            const event = await buildAiIncidentSseEvent(error, { route: "/api/project/create-stream" });
+            if (event) send(event);
+          }
         }
       } finally {
-        controller.close();
+        close();
       }
     },
   });
@@ -115,5 +114,6 @@ export async function POST(request: NextRequest) {
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     },
+  });
   });
 }

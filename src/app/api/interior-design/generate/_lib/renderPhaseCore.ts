@@ -9,7 +9,6 @@ import {
 import { buildGeminiProductVisualParts } from "@/lib/buildGeminiProductVisualParts";
 import { checkTokensServer, consumeTokensServer } from "@/lib/serverVistaTokens";
 import { getAnthropicApiKey, getGoogleGenerativeAiApiKey } from "@/lib/serverAiKeys";
-import { buildFurnitureLabels } from "@/lib/placementBoxes";
 import { buildSpendResponse, isDevSpendEnabled } from "@/lib/aiSpend";
 import { PUBLIC_AI_SERVICE_UNAVAILABLE, PUBLIC_AI_UNAVAILABLE } from "@/lib/tunzoneAi";
 import type { ProductPurchaseLink } from "@/lib/productPurchaseLinks";
@@ -20,7 +19,11 @@ import type { StepTimer } from "@/lib/generationDebug";
 import { debugIngest } from "@/lib/debugIngest";
 import { pipelineLog } from "@/lib/pipelineLog";
 import { resolveQuickRenderModel } from "@/lib/quickRoom/quickRenderModel";
+import { bootstrapQuickRoomReference } from "@/lib/quickRoom/bootstrapReferenceImage";
 import { runQuickRoomEditPipeline } from "@/lib/quickRoom/quickEditPipeline";
+import { parseShapeCreativityParam } from "@/lib/quickRoom/shapeCreativity";
+import { runQuickRoomGalleryEditPipeline } from "@/lib/quickRoom/quickRoomGalleryEdit";
+import { optimizeImageBufferForAi } from "@/lib/optimizeImageForAi";
 import { orderMerchantBlockIds } from "./merchantBlock";
 import { renderWithEmptyRetry, runRenderVision } from "./renderPipeline";
 import { generateGeminiInteriorImage } from "./geminiRender";
@@ -138,16 +141,19 @@ export async function runQuickRoomRenderPhase(opts: {
     "post-fix-v4",
   );
 
-  if (!googleKey) {
+  const renderSession = parseRenderSession(formData.get("renderSession"));
+  const isGalleryEditSessionEarly = renderSession?.renderMode === "gallery-edit";
+
+  if (!isGalleryEditSessionEarly && !googleKey) {
     const isDev = process.env.NODE_ENV === "development";
     const msg = isDev ? PUBLIC_AI_SERVICE_UNAVAILABLE : PUBLIC_AI_UNAVAILABLE;
     return { status: 503, body: { error: msg } };
   }
 
-  const renderSession = parseRenderSession(formData.get("renderSession"));
   timer.mark("render_session", {
     ok: Boolean(renderSession?.brief),
     selectedCount: renderSession?.selectedForGemini?.length ?? 0,
+    renderMode: renderSession?.renderMode ?? "initial",
   });
   if (!renderSession?.brief) {
     return {
@@ -182,6 +188,131 @@ export async function runQuickRoomRenderPhase(opts: {
     designStyleLabel: sessionStyleLabel,
     placementMode: sessionPlacementMode,
   } = renderSession;
+
+  const isGalleryEdit = renderSession.renderMode === "gallery-edit";
+
+  if (isGalleryEdit) {
+    if (resolveQuickRenderModel() !== "edit-pipeline") {
+      return {
+        status: 503,
+        body: {
+          error: "Gallery edit requires FAL render. Configure FAL_KEY.",
+          debug: timer.finish("render", { ok: false, galleryEdit: true }),
+        },
+      };
+    }
+    if (!roomImage) {
+      return {
+        status: 400,
+        body: {
+          error: "Approved render image is required for gallery edit.",
+          debug: timer.finish("render", { ok: false, galleryEdit: true }),
+        },
+      };
+    }
+
+    const editFeedbackText = renderSession.editFeedback?.trim() || editContext;
+    if (!editFeedbackText) {
+      return {
+        status: 400,
+        body: {
+          error: "Edit feedback is required.",
+          debug: timer.finish("render", { ok: false, galleryEdit: true }),
+        },
+      };
+    }
+
+    const roomBytes = await roomImage.arrayBuffer();
+    const optimized = await optimizeImageBufferForAi(Buffer.from(roomBytes));
+    timer.mark("gallery_edit_image", { bytes: optimized.byteLength });
+
+    let annotationBase64: string | undefined;
+    let annotationMime: string | undefined;
+    const editAnnotationImage = formData.get("editAnnotationImage");
+    if (
+      renderSession.hasEditAnnotation &&
+      editAnnotationImage &&
+      typeof editAnnotationImage === "object" &&
+      "arrayBuffer" in editAnnotationImage
+    ) {
+      const annOpt = await optimizeImageBufferForAi(
+        Buffer.from(await (editAnnotationImage as File).arrayBuffer()),
+      );
+      annotationBase64 = annOpt.base64;
+      annotationMime = annOpt.mimeType;
+    }
+
+    const gallerySessionId = `qr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    pipelineLog("FAL_RENDER", "quick room gallery edit render phase", {
+      editFeedbackChars: editFeedbackText.length,
+      hasAnnotation: !!annotationBase64,
+    });
+
+    await emitProgress?.({ message: "Applying your edit…", progress: 0.15 });
+
+    const galleryResult = await runQuickRoomGalleryEditPipeline({
+      sessionId: gallerySessionId,
+      approvedRenderBase64: optimized.base64,
+      approvedRenderMime: optimized.mimeType,
+      editFeedback: editFeedbackText,
+      hasEditAnnotation: renderSession.hasEditAnnotation,
+      annotationBase64,
+      annotationMime,
+      onProgress: emitProgress
+        ? async (ev) => {
+            await emitProgress({ message: ev.message, progress: 0.1 + ev.progress * 0.8 });
+          }
+        : undefined,
+    });
+
+    timer.mark("gallery_edit_pipeline", { ok: true });
+
+    const tokenGate = await consumeTokensServer(tokenAction, headers);
+    timer.mark("token_consume", { ok: tokenGate.ok });
+    if (!tokenGate.ok) {
+      return {
+        status: tokenGate.status,
+        body: {
+          error: tokenGate.message,
+          balance: tokenGate.balance,
+          required: tokenGate.required,
+          debug: timer.finish("render", { ok: false, galleryEdit: true }),
+        },
+      };
+    }
+
+    const responseSessionId = `id-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return {
+      status: 200,
+      body: {
+        balance: tokenGate.balance,
+        data: {
+          sessionId: responseSessionId,
+          designBrief: brief,
+          scrapedInventoryExclusive,
+          selectedCatalogIds: selectedForGemini,
+          usedCatalogIds: [],
+          plannedCatalogIds: plannedCatalogIds.length > 0 ? plannedCatalogIds : selectedForGemini,
+          images: [
+            {
+              id: `${responseSessionId}-img-0`,
+              base64: galleryResult.base64,
+              mimeType: galleryResult.mimeType,
+              prompt: brief.fullPrompt || editFeedbackText,
+            },
+          ],
+        },
+        adminSlug: sessionAdminSlug || adminSlug,
+        debug: timer.finish("render", {
+          ok: true,
+          galleryEdit: true,
+          selectedCatalogCount: selectedForGemini.length,
+          scrapedInventoryExclusive,
+        }),
+        ...(isDevSpendEnabled() ? { spend: buildSpendResponse() } : {}),
+      },
+    };
+  }
 
   const placementMode = sessionPlacementMode ?? "redesign";
   const isPlaceOnly = placementMode === "placeOnly";
@@ -249,7 +380,34 @@ export async function runQuickRoomRenderPhase(opts: {
     referenceImageMimeType = visualParts.roomInline.mimeType;
   }
 
-  console.info("gemini.visual_payload", { ...visualParts.stats, traceTag: "[gemini-product-images]" });
+  const sessionId = `qr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let bootstrappedReference = false;
+  try {
+    const resolved = await bootstrapQuickRoomReference({
+      referenceBase64,
+      referenceImageMimeType,
+      briefFullPrompt: brief.fullPrompt,
+      designStyleLabel: sessionStyleLabel || designStyleLabel,
+      sessionId,
+    });
+    referenceBase64 = resolved.base64;
+    referenceImageMimeType = resolved.mimeType;
+    bootstrappedReference = resolved.bootstrapped;
+  } catch (bootstrapErr) {
+    return {
+      status: 400,
+      body: {
+        error: bootstrapErr instanceof Error ? bootstrapErr.message : "Could not prepare room reference.",
+        debug: timer.finish("render", { ok: false }),
+      },
+    };
+  }
+
+  if (bootstrappedReference) {
+    roomAnalysis = null;
+  }
+
+  console.info("gemini.visual_payload", { ...visualParts.stats, traceTag: "[gemini-product-images]", bootstrappedReference });
 
   renderFunnel.snapshot("collage_included_pins", visualParts.includedPinnedIds);
   if (visualParts.pinFetchFailedIds.length > 0) {
@@ -284,32 +442,21 @@ export async function runQuickRoomRenderPhase(opts: {
   let images: Array<{ base64: string; mimeType: string }>;
   let validationWarning: string | undefined;
 
+  const effectiveObjectRemovalMask = bootstrappedReference ? null : objectRemovalMask;
+
   if (useEditPipeline) {
-    pipelineLog("FAL_RENDER", "quick room render via edit pipeline", {
+    pipelineLog("FAL_RENDER", "quick room render via staging→banana pipeline", {
       sheets: visualParts.productImageParts.length,
       pinned: pinnedMpKeysList.length,
-      hasStructuralLines: !!structuralLineMap,
-      hasRemovalMask: !!objectRemovalMask,
-      keepRoomShape,
+      hasRemovalMask: !!effectiveObjectRemovalMask,
+      bootstrappedReference,
     });
-    const furnitureLabels = buildFurnitureLabels({
-      requiredSlots: brief.requiredSlots,
-      catalogNames: visualParts.includedCatalogIds
-        .map((id) => catalogById.get(id)?.name ?? "")
-        .filter(Boolean),
-    });
-    const sessionId = `qr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const result = await runQuickRoomEditPipeline({
       sessionId,
       roomPhotoBase64: referenceBase64!,
       roomPhotoMime: referenceImageMimeType || "image/jpeg",
-      roomAnalysis,
-      isEditOfRender: keepRoomShape,
       placementMode,
-      objectRemovalMaskBase64: isPlaceOnly ? null : objectRemovalMask?.base64 ?? null,
-      structuralLineMap: structuralLineMap
-        ? { base64: structuralLineMap.base64, strokeOnly: structuralLineMap.strokeOnly }
-        : null,
+      objectRemovalMaskBase64: isPlaceOnly ? null : effectiveObjectRemovalMask?.base64 ?? null,
       productSheetInlines: visualParts.productImageParts.map((p) => p.inlineData),
       styleInspiration: !isPlaceOnly && styleInspirations[0]
         ? { base64: styleInspirations[0].base64, mimeType: styleInspirations[0].mimeType }
@@ -318,12 +465,10 @@ export async function runQuickRoomRenderPhase(opts: {
       designStyleLabel: sessionStyleLabel || designStyleLabel,
       productIntroText: visualParts.productIntroText,
       productCloseText: visualParts.productCloseText,
-      merchantAppendix: geminiMerchantAppendix,
       editContext,
-      furnitureLabels,
+      shapeCreativity: parseShapeCreativityParam(formData.get("shapeCreativity")),
       onProgress: emitProgress
         ? async (ev) => {
-            // Map the pipeline's internal 0..1 onto the phase's 0.05..0.8 band.
             await emitProgress({ message: ev.message, progress: 0.05 + ev.progress * 0.75 });
           }
         : undefined,
@@ -334,8 +479,22 @@ export async function runQuickRoomRenderPhase(opts: {
       droppedSheetCount: result.droppedSheetCount,
     });
     images = [result.image];
-    validationWarning = result.validationPassed ? undefined : result.validationWarning ?? "";
+    validationWarning = undefined;
+  } else if (!referenceBase64) {
+    return {
+      status: 400,
+      body: {
+        error: "Room photo is required when FAL render is unavailable. Upload a room photo or configure FAL_KEY.",
+        debug: timer.finish("render", { ok: false }),
+      },
+    };
   } else {
+    if (!googleKey) {
+      const isDev = process.env.NODE_ENV === "development";
+      const msg = isDev ? PUBLIC_AI_SERVICE_UNAVAILABLE : PUBLIC_AI_UNAVAILABLE;
+      return { status: 503, body: { error: msg } };
+    }
+
     // Annotated opening-marker guide (B grounding) — built once, reused across retries.
     const openingGuideInline = referenceBase64
       ? await annotateOpenings(
@@ -407,7 +566,7 @@ export async function runQuickRoomRenderPhase(opts: {
   images = visionResult.images;
   const finalVisionIds = visionResult.finalVisionIds;
 
-  const sessionId = `id-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const responseSessionId = `id-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const flooringSlotIds = extractFlooringSlotIds(undefined, catalogById, selectedForGemini);
   let verifiedLinks: ProductPurchaseLink[] = [];
   let usedCatalogIds: string[] = [];
@@ -481,7 +640,7 @@ export async function runQuickRoomRenderPhase(opts: {
     body: {
       balance: tokenGate.balance,
       data: {
-        sessionId,
+        sessionId: responseSessionId,
         designBrief: brief,
         scrapedInventoryExclusive,
         selectedCatalogIds: selectedForGemini,
@@ -495,7 +654,7 @@ export async function runQuickRoomRenderPhase(opts: {
                 allowedCatalogKeys: new Set(catalogById.keys()),
               }),
         images: images.map((img, i) => ({
-          id: `${sessionId}-img-${i}`,
+          id: `${responseSessionId}-img-${i}`,
           base64: img.base64,
           mimeType: img.mimeType,
           prompt: brief.fullPrompt,

@@ -2,6 +2,7 @@ import { useConsumerDesignStore } from "@/app/store";
 import { authJsonHeaders } from "@/lib/authApi";
 import type { DesignVersion, DesignBriefResult, ProductPurchaseLink } from "@/app/store";
 import type { RoomAnalysis } from "@/lib/interiorDesignPrompts";
+import { normalizeRoomTypeValue } from "@/lib/interiorDesignPrompts";
 import type { RoomGeometry } from "@/lib/roomGeometryTypes";
 import type {
   FloorPlanAnalysis,
@@ -351,6 +352,11 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
 
   if (project.roomAnalysis) {
     store.setQuickRoomAnalysis(project.roomAnalysis);
+    if (!prefs.quickRoomOptions?.selectedQuickRoomType && project.roomAnalysis.room_type) {
+      store.setSelectedQuickRoomType(
+        normalizeRoomTypeValue(project.roomAnalysis.room_type),
+      );
+    }
   }
   if (project.roomGeometry) {
     store.setLastRoomGeometry(project.roomGeometry, false);
@@ -365,8 +371,10 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
     const latestImg = latest.fileUrl ? await fetchUrlAsBase64FromProject(latest.fileUrl) : null;
     if (latestImg) {
       store.setGeneratedImage(latestImg.base64, latestImg.mimeType);
+      store.setQuickRoomView("result");
     } else {
       store.setGeneratedImage(null, null);
+      store.setQuickRoomView("compose");
     }
     store.setDesignBrief(latest.designBrief ?? null);
     if (latest.productsUsed) {
@@ -393,6 +401,7 @@ async function hydrateQuickRoomProject(project: HydratedProjectData): Promise<vo
     store.setDesignBrief(null);
     store.setProductLinks([]);
     store.setDesignHistory([]);
+    store.setQuickRoomView("compose");
   }
 
   const draftPrompt = prefs.draftPrompt?.trim();

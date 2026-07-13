@@ -1,4 +1,5 @@
 import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
+import { normalizeRoomTypeValue } from "@/lib/interiorDesignPrompts";
 import { useConsumerDesignStore } from "@/app/store";
 
 export type QuickRoomOptionsPayload = {
@@ -8,6 +9,7 @@ export type QuickRoomOptionsPayload = {
   selectedCountry: string;
   selectedStyle: string;
   selectedProductIds: number[];
+  selectedQuickRoomType?: string;
 };
 
 export type QuickRoomPhasedStatePayload = {
@@ -33,6 +35,7 @@ export function buildQuickRoomOptionsFromStore(): QuickRoomOptionsPayload {
     selectedCountry: s.selectedCountry,
     selectedStyle: s.selectedStyle,
     selectedProductIds: s.selectedProducts.map((p) => p.id),
+    selectedQuickRoomType: s.selectedQuickRoomType,
   };
 }
 
@@ -57,6 +60,9 @@ export function applyQuickRoomOptionsFromPreferences(
   if (options.searchMode) store.setSearchMode(options.searchMode as never);
   if (options.selectedCountry) store.setSelectedCountry(options.selectedCountry);
   if (options.selectedStyle) store.setSelectedStyle(options.selectedStyle);
+  if (options.selectedQuickRoomType) {
+    store.setSelectedQuickRoomType(normalizeRoomTypeValue(options.selectedQuickRoomType));
+  }
   if (Array.isArray(options.selectedProductIds)) {
     // Product objects are restored separately when possible; ids kept in prefs for reference.
     void options.selectedProductIds;

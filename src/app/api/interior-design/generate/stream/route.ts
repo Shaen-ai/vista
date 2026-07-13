@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { runWithLogContext } from "@/lib/logSink";
+import { withRequestUploadUser } from "@/lib/uploadUserContext";
 import { StepTimer } from "@/lib/generationDebug";
 import { checkTokensServer } from "@/lib/serverVistaTokens";
 import {
@@ -17,13 +18,16 @@ import {
   isOverloadedAiError,
   reportOverloadedIncident,
 } from "@/lib/aiIncident";
+import { createSseEmitter, isStreamClosedError } from "@/lib/sseStream";
 import { runQuickRoomRenderPhase } from "../_lib/renderPhaseCore";
 
 export const maxDuration = 900;
 
 export function POST(request: NextRequest) {
   const logId = `quick-stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  return runWithLogContext(logId, () => handleQuickRoomStream(request));
+  return runWithLogContext(logId, () =>
+    withRequestUploadUser(request, () => handleQuickRoomStream(request)),
+  );
 }
 
 async function handleQuickRoomStream(request: NextRequest) {
@@ -55,12 +59,9 @@ async function handleQuickRoomStream(request: NextRequest) {
     );
   }
 
-  const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      function emit(event: unknown) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-      }
+      const { emit, close } = createSseEmitter(controller);
 
       // First bytes immediately — keeps Cloudflare's idle timeout at bay while
       // the catalog refetch and image prep run.
@@ -88,7 +89,10 @@ async function handleQuickRoomStream(request: NextRequest) {
           });
         }
       } catch (error: unknown) {
-        if (isOverloadedAiError(error)) {
+        if (isStreamClosedError(error)) {
+          // Client disconnected mid-render — generation may still finish server-side;
+          // do not emit or page support.
+        } else if (isOverloadedAiError(error)) {
           reportOverloadedIncident("/api/interior-design/generate/stream");
           emit({
             phase: "error",
@@ -100,10 +104,10 @@ async function handleQuickRoomStream(request: NextRequest) {
             route: "/api/interior-design/generate/stream",
             phase: "render",
           });
-          emit(event);
+          if (event) emit(event);
         }
       } finally {
-        controller.close();
+        close();
       }
     },
   });

@@ -2,50 +2,64 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { DesignBrief } from "@/lib/interiorDesignPrompts";
 import {
+  PROMPT_CHAR_CAP,
+  buildPreserveBlock,
+  buildQuickRoomBananaImageRoles,
   buildQuickRoomEditInstruction,
   buildQuickRoomImageRoles,
 } from "./quickEditPrompt";
 
-const brief: Pick<DesignBrief, "subject" | "arrangement" | "fullPrompt" | "doorDesign"> = {
+const brief: Pick<DesignBrief, "subject" | "arrangement"> = {
   subject: "Cozy scandinavian living room with a sage green sofa.",
   arrangement: "Sofa against the north wall, round rug in the center.",
-  fullPrompt: "A calm scandinavian living room in soft whites and sage greens. ".repeat(10),
-  doorDesign: "Matte white door leaf with brass handle.",
 };
 
-test("image roles: first image is sole geometry authority", () => {
+test("image roles: staged shell is sole geometry authority", () => {
   const roles = buildQuickRoomImageRoles({
     collageSheetCount: 0,
     hasStyleInspiration: false,
-    hasStructuralMarkup: false,
+    runShell: true,
   });
-  assert.match(roles, /IMAGE ROLES/);
-  assert.match(roles, /FIRST image is the real photo .* ONLY authority for geometry/);
-  assert.match(roles, /Geometry comes exclusively from the first image/);
+  assert.match(roles, /FIRST image is the staged empty room/);
+  assert.match(roles, /sole authority for walls, openings, ceiling, floor, and camera/);
   assert.doesNotMatch(roles, /PRODUCT REFERENCE/);
 });
 
-test("image roles enumerate product sheets, style inspiration, and structural markup", () => {
+test("image roles: original photo when runShell is false", () => {
   const roles = buildQuickRoomImageRoles({
-    collageSheetCount: 3,
-    hasStyleInspiration: true,
-    hasStructuralMarkup: true,
+    collageSheetCount: 0,
+    hasStyleInspiration: false,
+    runShell: false,
   });
-  assert.match(roles, /Images 2-4 are PRODUCT REFERENCE SHEETS/);
-  assert.match(roles, /NEVER render a collage sheet itself/);
-  assert.match(roles, /Image 5 is the user's STYLE INSPIRATION/);
-  assert.match(roles, /LAST image is the same room photo with GOLD LINES/);
-  assert.match(roles, /Never draw gold lines in the output/);
+  assert.match(roles, /FIRST image is the original room photo/);
+  assert.doesNotMatch(roles, /staged empty room/);
 });
 
-test("single sheet uses singular image role numbering", () => {
-  const roles = buildQuickRoomImageRoles({
-    collageSheetCount: 1,
-    hasStyleInspiration: true,
-    hasStructuralMarkup: false,
+test("banana image roles: original photo when runShell is false", () => {
+  const roles = buildQuickRoomBananaImageRoles({
+    collageSheetCount: 0,
+    hasStyleInspiration: false,
+    runShell: false,
   });
-  assert.match(roles, /Image 2 is a PRODUCT REFERENCE SHEET/);
-  assert.match(roles, /Image 3 is the user's STYLE INSPIRATION/);
+  assert.equal(roles[0], "0: original room photo — geometry authority");
+});
+
+test("image roles enumerate product sheets and style inspiration", () => {
+  const roles = buildQuickRoomImageRoles({
+    collageSheetCount: 2,
+    hasStyleInspiration: true,
+    runShell: true,
+  });
+  assert.match(roles, /Images 2-3 are PRODUCT REFERENCE SHEETS/);
+  assert.match(roles, /Image 4 is STYLE INSPIRATION/);
+  assert.doesNotMatch(roles, /GOLD LINES/);
+});
+
+test("preserve block always present for all modes", () => {
+  assert.match(buildPreserveBlock("veryStrong"), /^PRESERVE:/);
+  assert.match(buildPreserveBlock("strong"), /^PRESERVE:/);
+  assert.match(buildPreserveBlock("soft"), /^PRESERVE:/);
+  assert.doesNotMatch(buildPreserveBlock("soft"), /drift|may change|can change/i);
 });
 
 test("edit instruction uses place-only CHANGE when placementMode is placeOnly", () => {
@@ -56,77 +70,65 @@ test("edit instruction uses place-only CHANGE when placementMode is placeOnly", 
     placementMode: "placeOnly",
   });
   assert.match(prompt, /CHANGE: Place only the user-provided product\(s\)/);
-  assert.doesNotMatch(prompt, /CHANGE: Redesign this room/);
-  assert.doesNotMatch(prompt, /Door styling:/);
-  assert.match(prompt, /Placement direction:/);
+  assert.doesNotMatch(prompt, /CHANGE: Furnish this room/);
 });
 
-test("edit instruction carries PRESERVE scaffold with opening counts", () => {
+test("edit instruction preserves room shape and caps length", () => {
   const prompt = buildQuickRoomEditInstruction({
     brief,
     designStyleLabel: "Scandinavian",
-    openingBoxCounts: { windows: 2, doors: 1 },
     imageRoles: "IMAGE ROLES: test.",
+    productIntroText: "INTRO. ".repeat(200),
+    productCloseText: "MANIFEST. ".repeat(200),
+    editContext: "Make the rug blue.",
   });
-  assert.match(prompt, /^IMAGE ROLES: test\./);
-  assert.match(prompt, /PRESERVE: Keep the exact room geometry/);
-  assert.match(prompt, /Protect 2 window\(s\) in their exact positions/);
-  assert.match(prompt, /1 door opening\(s\) in their exact positions/);
-  assert.match(prompt, /exactly 1 door opening\(s\) in this photo/);
-  assert.match(prompt, /CHANGE: Redesign this room as a photorealistic Scandinavian interior/);
-  assert.match(prompt, /Design: Cozy scandinavian living room/);
-  assert.match(prompt, /Furniture arrangement: Sofa against the north wall/);
-  assert.match(prompt, /Door styling: Matte white door leaf/);
+  assert.match(prompt, /PRESERVE: Keep the exact room shape from the FIRST image/);
+  assert.match(prompt, /CHANGE: Furnish this room as a photorealistic Scandinavian interior/);
+  assert.match(prompt, /Focus: Cozy scandinavian living room/);
+  assert.match(prompt, /Adjustments: Make the rug blue\./);
+  assert.ok(prompt.length <= PROMPT_CHAR_CAP);
+  assert.doesNotMatch(prompt, /MERCHANT/);
 });
 
-test("zero doors asserts NO doors; unknown counts forbid inventing doors", () => {
-  const zeroDoors = buildQuickRoomEditInstruction({
-    brief,
-    designStyleLabel: "Modern",
-    openingBoxCounts: { windows: 1, doors: 0 },
-    imageRoles: "ROLES.",
-  });
-  assert.match(zeroDoors, /walls visible in this photo contain NO doors/);
-
-  const unknown = buildQuickRoomEditInstruction({
-    brief,
-    designStyleLabel: "Modern",
-    imageRoles: "ROLES.",
-  });
-  assert.match(unknown, /Never add a door or doorway that is not present/);
-});
-
-test("product manifest text is never trimmed; brief fullPrompt and appendix drop under budget pressure", () => {
-  const bigIntro = "PRODUCT IMAGES BELOW. ".repeat(100);
-  const bigClose = `IMAGE MANIFEST: Sheet1-A1 = mp-1. ${"Pinned by user — MANDATORY. ".repeat(120)}`;
-  const appendix = "MERCHANT CATALOG: ".repeat(300);
+test("veryStrong preserve adds extra geometry lock", () => {
   const prompt = buildQuickRoomEditInstruction({
-    brief: { ...brief, fullPrompt: "UNIQUE-DESIGN-DIRECTION ".repeat(200) },
+    brief,
     designStyleLabel: "Modern",
     imageRoles: "ROLES.",
-    productIntroText: bigIntro,
-    productCloseText: bigClose,
-    merchantAppendix: appendix,
+    preserveMode: "veryStrong",
+  });
+  assert.match(prompt, /Do not alter room geometry, openings, or perspective/);
+});
+
+test("creative mode uses expressive CHANGE wording", () => {
+  const prompt = buildQuickRoomEditInstruction({
+    brief,
+    designStyleLabel: "Modern",
+    imageRoles: "ROLES.",
+    creativeMode: "creative",
+  });
+  assert.match(prompt, /fresh, expressive Modern interior/);
+  assert.match(prompt, /PRESERVE:/);
+});
+
+test("moreCreative mode uses bold CHANGE wording", () => {
+  const prompt = buildQuickRoomEditInstruction({
+    brief,
+    designStyleLabel: "Modern",
+    imageRoles: "ROLES.",
+    creativeMode: "moreCreative",
+  });
+  assert.match(prompt, /bold, imaginative Modern interior/);
+});
+
+test("product manifest text is included when within budget", () => {
+  const prompt = buildQuickRoomEditInstruction({
+    brief,
+    designStyleLabel: "Modern",
+    imageRoles: "ROLES.",
+    productIntroText: "PRODUCT IMAGES BELOW.",
+    productCloseText: "IMAGE MANIFEST: Sheet1-A1 = mp-1.",
   });
   assert.match(prompt, /PRODUCT IMAGES BELOW/);
   assert.match(prompt, /IMAGE MANIFEST/);
-  assert.doesNotMatch(prompt, /UNIQUE-DESIGN-DIRECTION/);
-  assert.doesNotMatch(prompt, /MERCHANT CATALOG/);
-});
-
-test("under budget everything is included, appendix capped at 3800 chars", () => {
-  const prompt = buildQuickRoomEditInstruction({
-    brief,
-    designStyleLabel: "Modern",
-    imageRoles: "ROLES.",
-    productIntroText: "INTRO.",
-    productCloseText: "MANIFEST.",
-    merchantAppendix: "APPENDIX-LINE. ",
-    editContext: "Make the rug blue.",
-  });
-  assert.match(prompt, /INTRO\./);
-  assert.match(prompt, /MANIFEST\./);
-  assert.match(prompt, /APPENDIX-LINE\./);
-  assert.match(prompt, /Design direction: A calm scandinavian living room/);
-  assert.match(prompt, /User adjustments: Make the rug blue\./);
 });

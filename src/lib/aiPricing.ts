@@ -43,6 +43,7 @@ const GEMINI_IMAGE_PRICING: Record<string, number> = {
 const FAL_ENDPOINT_PRICING: Record<string, number> = {
   "fal-ai/flux-pro/kontext": 0.04,
   "fal-ai/flux-pro/kontext/multi": 0.05,
+  "fal-ai/flux-pro/v1.1": 0.04,
   "fal-ai/flux-general/image-to-image": 0.035,
   "fal-ai/flux-general/inpainting": 0.04,
   "fal-ai/flux-2-lora-gallery/apartment-staging": 0.042,

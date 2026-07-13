@@ -33,6 +33,7 @@ import {
   Save,
   Check,
   Edit3,
+  Share2,
 } from "lucide-react";
 import {
   useConsumerDesignStore,
@@ -74,6 +75,7 @@ import {
   applyStyleInspirationsToStore,
 } from "@/lib/inspirationPersistence";
 import { loadAndHydrateProject } from "@/lib/projectHydration";
+import { consumeJustHydratedFromHub } from "@/lib/projectHydrationSkip";
 import { loadSessionBlobs, loadSessionMeta } from "@/lib/project/sessionStorage";
 import "@/app/design.css";
 import { useRouter } from "next/navigation";
@@ -90,25 +92,13 @@ const GenerationDebugPanel = dynamic(
 );
 import { isArmeniaLocalScrapedExclusive } from "@/lib/scrapedAllowlist";
 import { analyzeAndRedesign, runPhasedGeneration } from "@/lib/analyzeAndRedesign";
+import { QuickRoomResultOverlay } from "@/components/QuickRoomResultOverlay";
+import type { QuickRoomLoaderPhase } from "@/components/QuickRoomGenerationLoader";
 import type { GenerationClientTrace } from "@/lib/generationDebug";
 import { catalogCategorySortKey, PRODUCT_DISPLAY_BAND } from "@/lib/productDisplayOrder";
 import {
-  normalizeRoomAnalysisOpenings,
-  effectiveQuickRoomSpatialConfidence,
-  quickRoomNeedsMandatorySpatialClarification,
   ROOM_TYPES,
-  ROOM_SHAPES,
-  CEILING_TYPES,
-  type RoomAnalysis,
 } from "@/lib/interiorDesignPrompts";
-import { localizeRoomAnalysisForLocale } from "@/lib/roomAnalysisLocalization";
-import RoomShapeEditor from "@/components/RoomShapeEditor";
-import OpeningBoxEditor from "@/components/OpeningBoxEditor";
-import {
-  bboxFromPolygonEdges,
-  roomShapeUsesPolygonEditor,
-  syncPolygonEdgesForShape,
-} from "@/lib/roomShapePolygon";
 import { formatApiErrorMessage } from "@/lib/apiError";
 import { sanitizeUserFacingMessage } from "@/lib/userFacingMessages";
 import { track } from "@/lib/analytics";
@@ -117,6 +107,7 @@ import {
   throwIfAiServiceUnavailable,
 } from "@/lib/aiServiceError";
 import { SupportContactModal } from "@/components/SupportContactModal";
+import { ShareProjectModal } from "@/components/ShareProjectModal";
 import { LowBalancePrompt } from "@/components/LowBalancePrompt";
 import { useVistaUiTheme } from "@/app/VistaThemeProvider";
 import { VistaHeaderActions } from "@/components/VistaHeaderActions";
@@ -1040,13 +1031,13 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     roomImageBase64,
     roomImageMimeType,
     quickRoomExtraPhotos,
-    quickRoomAnalysis,
-    quickRoomAnalyzing,
-    quickRoomAnalyzeError,
+    selectedQuickRoomType,
     textPrompt,
     selectedStyle,
     designMode,
     placementMode,
+    shapeCreativity,
+    quickRoomView,
     generatedImageBase64,
     generatedImageMimeType,
     designBrief,
@@ -1067,12 +1058,12 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setRoomImage,
     addQuickRoomExtraPhoto,
     removeQuickRoomExtraPhoto,
-    setQuickRoomAnalysis,
-    setQuickRoomAnalyzing,
-    setQuickRoomAnalyzeError,
+    setSelectedQuickRoomType,
     setTextPrompt,
     setSelectedStyle,
     setPlacementMode,
+    setShapeCreativity,
+    setQuickRoomView,
     setGeneratedImage,
     setDesignBrief,
     pushDesignVersion,
@@ -1159,14 +1150,13 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
   const [uiTheme, setUiTheme] = useVistaUiTheme();
   const { t, locale } = useTranslation();
-  const { quickStyles, roomTypeLabel, roomShapeLabel, ceilingTypeLabel } = useCatalogLabels();
+  const { quickStyles, roomTypeLabel } = useCatalogLabels();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const extraFileInputRef = useRef<HTMLInputElement>(null);
   const chatImageRef = useRef<HTMLInputElement>(null);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedProductsListRef = useRef<HTMLDivElement>(null);
   const prevSelectedCountRef = useRef(0);
-  const quickRoomLocalizedRef = useRef<string | null>(null);
   const sidebarPreloadedRef = useRef(false);
   const isWorkspace = variant !== "landing";
   /** Catalog sidebar search/preload runs only in Quick Room — not Full Project. */
@@ -1186,6 +1176,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     if (variant !== "quick-workspace") return;
     let cancelled = false;
     void (async () => {
+      if (consumeJustHydratedFromHub()) {
+        return;
+      }
       const meta = loadSessionMeta("quick");
       const projectDbId = meta?.projectDbId ?? useConsumerDesignStore.getState().currentProjectDbId;
       if (projectDbId && getAuthToken()) {
@@ -1193,6 +1186,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         if (!cancelled && ok) return;
       }
       if (cancelled) return;
+      if (!meta) return;
       const blobs = await loadSessionBlobs();
       if (!cancelled) {
         applyStyleInspirationsToStore(blobs?.styleInspirations);
@@ -1258,6 +1252,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const [saveDesignSaving, setSaveDesignSaving] = useState(false);
   const [saveDesignDone, setSaveDesignDone] = useState(false);
   const [supportModalOpen, setSupportModalOpen] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
   const {
     loadProjects,
     renameProject,
@@ -1288,12 +1283,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       .then((data) => setTokenBalance(data.balance))
       .catch(() => refreshTokenBalance());
   }, [setTokenBalance, refreshTokenBalance]);
-  const [quickAnalyzeNonce, setQuickAnalyzeNonce] = useState(0);
-  const [quickRoomFactsExpanded, setQuickRoomFactsExpanded] = useState(false);
   const [generatePhase, setGeneratePhase] = useState<GeneratePhase>("idle");
   const [generationDebug, setGenerationDebug] = useState<GenerationClientTrace | null>(null);
   const [phasedProgressText, setPhasedProgressText] = useState("");
-  const quickAnalyzeRunIdRef = useRef(0);
 
   const generatePhaseMessage =
     generatePhase === "analysing"
@@ -1317,18 +1309,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   }, [roomImageBase64]);
 
   useEffect(() => {
-    if (locale === "en" || !quickRoomAnalysis) return;
-    const fingerprint = JSON.stringify(quickRoomAnalysis);
-    if (quickRoomLocalizedRef.current === fingerprint) return;
-    const localized = localizeRoomAnalysisForLocale(quickRoomAnalysis, locale);
-    const localizedFingerprint = JSON.stringify(localized);
-    quickRoomLocalizedRef.current = localizedFingerprint;
-    if (localizedFingerprint !== fingerprint) {
-      setQuickRoomAnalysis(localized);
-    }
-  }, [locale, quickRoomAnalysis, setQuickRoomAnalysis]);
-
-  useEffect(() => {
     if (!showLanding) {
       setMobileTab("design");
     }
@@ -1337,27 +1317,116 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   useEffect(() => {
     if (!isMobile) {
       setKeyboardOpen(false);
+      document.documentElement.style.removeProperty("--keyboard-inset");
       return;
     }
-    const onFocusIn = (e: FocusEvent) => {
-      const target = e.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-        setKeyboardOpen(true);
+
+    const isEditable = (el: EventTarget | null): el is HTMLElement =>
+      el instanceof HTMLInputElement ||
+      el instanceof HTMLTextAreaElement ||
+      (el instanceof HTMLElement && el.isContentEditable);
+
+    const syncKeyboardInset = () => {
+      const vv = window.visualViewport;
+      if (!vv) {
+        document.documentElement.style.setProperty("--keyboard-inset", "0px");
+        return 0;
+      }
+      // On iOS/Android the layout viewport often stays full-height while the
+      // visual viewport shrinks above the keyboard.
+      const inset = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      document.documentElement.style.setProperty("--keyboard-inset", `${inset}px`);
+      return inset;
+    };
+
+    const ensureFocusedVisible = (el: HTMLElement) => {
+      const vv = window.visualViewport;
+      // Keep the field clearly above the keyboard (not flush against it).
+      const bottomClearance = 112;
+      const topMargin = 16;
+      if (!vv) {
+        el.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const visibleTop = vv.offsetTop + topMargin;
+      const visibleBottom = vv.offsetTop + vv.height - bottomClearance;
+      const overflowBelow = rect.bottom - visibleBottom;
+      const overflowAbove = visibleTop - rect.top;
+      if (overflowBelow <= 0 && overflowAbove <= 0) return;
+
+      let scrollParent: HTMLElement | null = el.parentElement;
+      while (scrollParent) {
+        const { overflowY } = getComputedStyle(scrollParent);
+        if (
+          (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+          scrollParent.scrollHeight > scrollParent.clientHeight
+        ) {
+          break;
+        }
+        scrollParent = scrollParent.parentElement;
+      }
+      if (scrollParent) {
+        scrollParent.scrollTop += overflowBelow > 0 ? overflowBelow : -overflowAbove;
+      } else {
+        el.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
       }
     };
+
+    let focusTimers: number[] = [];
+    const clearFocusTimers = () => {
+      for (const id of focusTimers) window.clearTimeout(id);
+      focusTimers = [];
+    };
+
+    const onFocusIn = (e: FocusEvent) => {
+      if (!isEditable(e.target)) return;
+      setKeyboardOpen(true);
+      const el = e.target;
+      clearFocusTimers();
+      // Keyboard animation is async (esp. iOS); retry until inset settles.
+      for (const delay of [50, 150, 350, 500]) {
+        focusTimers.push(
+          window.setTimeout(() => {
+            syncKeyboardInset();
+            ensureFocusedVisible(el);
+          }, delay),
+        );
+      }
+    };
+
     const onFocusOut = () => {
       requestAnimationFrame(() => {
-        const active = document.activeElement;
-        if (!(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)) {
+        if (!isEditable(document.activeElement)) {
           setKeyboardOpen(false);
+          clearFocusTimers();
+          document.documentElement.style.setProperty("--keyboard-inset", "0px");
         }
       });
     };
+
+    const onViewportChange = () => {
+      const inset = syncKeyboardInset();
+      const active = document.activeElement;
+      if (isEditable(active)) {
+        if (inset > 80) setKeyboardOpen(true);
+        ensureFocusedVisible(active);
+      } else if (inset <= 40) {
+        setKeyboardOpen(false);
+      }
+    };
+
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("focusout", onFocusOut);
+    window.visualViewport?.addEventListener("resize", onViewportChange);
+    window.visualViewport?.addEventListener("scroll", onViewportChange);
     return () => {
+      clearFocusTimers();
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
+      window.visualViewport?.removeEventListener("resize", onViewportChange);
+      window.visualViewport?.removeEventListener("scroll", onViewportChange);
+      document.documentElement.style.removeProperty("--keyboard-inset");
     };
   }, [isMobile]);
 
@@ -1569,98 +1638,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     [handleImageFile]
   );
 
-  const patchQuickRoomAnalysis = useCallback(
-    (partial: Omit<Partial<RoomAnalysis>, "estimated_dimensions"> & {
-      estimated_dimensions?: Partial<RoomAnalysis["estimated_dimensions"]>;
-      polygon_edges?: RoomAnalysis["polygon_edges"];
-    }) => {
-      useConsumerDesignStore.setState((s) => {
-        const prev = s.quickRoomAnalysis;
-        if (!prev) return {};
-        const merged: RoomAnalysis = {
-          ...prev,
-          ...partial,
-          estimated_dimensions: {
-            ...prev.estimated_dimensions,
-            ...(partial.estimated_dimensions ?? {}),
-          },
-        };
-        const next = normalizeRoomAnalysisOpenings(merged);
-        return {
-          quickRoomAnalysis: next,
-        };
-      });
-    },
-    [],
-  );
-
-  const runQuickRoomAnalyze = useCallback(async () => {
-    if (!roomImageBase64 || !roomImageMimeType) return;
-    const runId = ++quickAnalyzeRunIdRef.current;
-    setQuickRoomAnalyzing(true);
-    setQuickRoomAnalyzeError(null);
-    setQuickRoomFactsExpanded(false);
-    try {
-      const form = new FormData();
-      const blob = await fetch(`data:${roomImageMimeType};base64,${roomImageBase64}`).then((r) => r.blob());
-      form.set("roomImage", blob, "room.jpg");
-      form.set("locale", locale);
-
-      const res = await fetch("/api/interior-design/analyze", { method: "POST", body: form });
-      let json: unknown;
-      try {
-        json = await res.json();
-      } catch {
-        throw new Error(t("page.invalidAnalyzeResponse"));
-      }
-      if (runId !== quickAnalyzeRunIdRef.current) return;
-      const errObj =
-        typeof json === "object" && json !== null && "error" in json
-          ? (json as { error?: unknown }).error
-          : undefined;
-      const msg = typeof errObj === "string" && errObj.trim() ? errObj.trim() : t("page.roomAnalysisFailed");
-      if (!res.ok || typeof json !== "object" || json === null || !(json as { data?: unknown }).data) {
-        const code =
-          typeof json === "object" && json !== null && "code" in json
-            ? (json as { code?: string }).code
-            : undefined;
-        throwIfAiServiceUnavailable({ error: msg, code });
-        throw new Error(msg);
-      }
-      setQuickRoomAnalysis(
-        localizeRoomAnalysisForLocale(
-          normalizeRoomAnalysisOpenings((json as { data: unknown }).data),
-          locale,
-        ),
-      );
-    } catch (e) {
-      if (runId !== quickAnalyzeRunIdRef.current) return;
-      if (openSupportModalForAiError(e)) {
-        setQuickRoomAnalyzeError(null);
-      } else {
-        setQuickRoomAnalyzeError(e instanceof Error ? e.message : t("page.analysisFailed"));
-      }
-      setQuickRoomAnalysis(null);
-    } finally {
-      if (runId === quickAnalyzeRunIdRef.current) setQuickRoomAnalyzing(false);
-    }
-  }, [
-    roomImageBase64,
-    roomImageMimeType,
-    setQuickRoomAnalyzing,
-    setQuickRoomAnalyzeError,
-    setQuickRoomAnalysis,
-    t,
-    locale,
-  ]);
-
-  useEffect(() => {
-    if (vistaMode !== "quick") return;
-    if (!roomImageBase64 || !roomImageMimeType) return;
-    if (quickRoomAnalysis) return;
-    void runQuickRoomAnalyze();
-  }, [vistaMode, roomImageBase64, roomImageMimeType, quickRoomAnalysis, quickAnalyzeNonce, runQuickRoomAnalyze]);
-
   const amLocalExclusive = isArmeniaLocalScrapedExclusive(selectedCountry, searchMode);
 
   const sidebarPreviewSections = useMemo(
@@ -1720,22 +1697,19 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   );
 
   const quickRoomSpatialReady =
-    vistaMode !== "quick" ||
-    !roomImageBase64 ||
-    Boolean(
-      quickRoomAnalysis &&
-        !quickRoomAnalyzing &&
-        !quickRoomAnalyzeError,
-    );
+    vistaMode !== "quick" || !roomImageBase64 || !!selectedQuickRoomType;
 
   const hasProvidedProducts =
     inspirationProducts.length > 0 || selectedProducts.length > 0;
 
+  const needsRoomPhotoForGenerate =
+    designMode === "made" || placementMode === "placeOnly";
+
   const generateFormReady =
-    !!roomImageBase64 &&
     !isGenerating &&
     quickRoomSpatialReady &&
-    (placementMode !== "placeOnly" || hasProvidedProducts);
+    (!needsRoomPhotoForGenerate || !!roomImageBase64) &&
+    (placementMode !== "placeOnly" || (hasProvidedProducts && !!roomImageBase64));
 
   const insufficientTokensForGenerate =
     tokenBalance !== null && tokenBalance < TOKEN_COSTS.generate;
@@ -1750,15 +1724,21 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     promptOverride?: string;
     feedbackText?: string;
     attachmentOverride?: { base64: string; mimeType: string } | null;
+    editAnnotationOverride?: { base64: string; mimeType: string } | null;
     keepRoomShape?: boolean;
     tokenAction?: TokenAction;
+    galleryEdit?: boolean;
+    editFeedback?: string;
+    hasEditAnnotation?: boolean;
   }) => {
     const tokenAction: TokenAction = opts?.tokenAction ?? "generate";
     const actionCost = TOKEN_COSTS[tokenAction];
     const prompt = opts?.promptOverride ?? (textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT);
     const imgB64 = opts?.attachmentOverride?.base64 ?? roomImageBase64;
     const imgMime = opts?.attachmentOverride?.mimeType ?? roomImageMimeType;
-    if (!imgB64 || !prompt || isGenerating) return;
+    const hasRoomInput = !!(imgB64 && imgMime);
+    if (!prompt || isGenerating) return;
+    if (opts?.keepRoomShape && !hasRoomInput) return;
     if (tokenBalance !== null && tokenBalance < actionCost) {
       setError(t("tokens.insufficientBalance", { cost: actionCost, balance: tokenBalance }));
       track("design_generate_blocked", { mode: "quick", reason: "balance", token_action: tokenAction });
@@ -1784,12 +1764,17 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setGeneratePhase("generating");
     setError(null);
     setGenerationDebug(null);
-    setDesignBrief(null);
+    if (!opts?.galleryEdit) {
+      setDesignBrief(null);
+    }
     setProductLinks([]);
     setUsedScrapedProducts([]);
 
     try {
-      const blob = await fetch(`data:${imgMime};base64,${imgB64}`).then((r) => r.blob());
+      let roomBlob: Blob | undefined;
+      if (hasRoomInput && imgB64 && imgMime) {
+        roomBlob = await fetch(`data:${imgMime};base64,${imgB64}`).then((r) => r.blob());
+      }
 
       const isCustom = designMode === "custom";
       const buildGenerateFormData = async () => {
@@ -1800,23 +1785,46 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         form.set("searchMode", searchMode);
         form.set("designMode", designMode);
         form.set("placementMode", placementMode);
+        if (isCustom) {
+          form.set("shapeCreativity", String(shapeCreativity));
+        }
         // Custom mode is a free render with no catalog tie — don't trigger the
         // scraped-catalog path (quickRoomMode) or send catalog allowlist constraints.
         if (!isCustom) {
           form.set("quickRoomMode", "true");
         }
-        form.set("roomImage", blob, "room.jpg");
+        if (roomBlob) {
+          form.set("roomImage", roomBlob, "room.jpg");
+        }
+        form.set("roomType", selectedQuickRoomType);
 
         for (const extra of quickRoomExtraPhotos) {
           const extraBlob = await fetch(`data:${extra.mimeType};base64,${extra.base64}`).then((r) => r.blob());
           form.append("extraRoomImages", extraBlob, "extra-room.jpg");
         }
 
+        if (opts?.galleryEdit && opts.editFeedback?.trim()) {
+          form.set("quickRoomGalleryEdit", "true");
+          form.set("editFeedback", opts.editFeedback.trim());
+          if (opts.hasEditAnnotation) {
+            form.set("hasEditAnnotation", "true");
+          }
+          if (designBrief) {
+            form.set("priorDesignBrief", JSON.stringify(designBrief));
+          }
+        }
+
+        if (opts?.galleryEdit && opts.editAnnotationOverride?.base64) {
+          const annBlob = await fetch(
+            `data:${opts.editAnnotationOverride.mimeType};base64,${opts.editAnnotationOverride.base64}`,
+          ).then((r) => r.blob());
+          form.set("editAnnotationImage", annBlob, "edit-annotation.png");
+        }
+
         if (opts?.keepRoomShape) {
           form.set("keepRoomShape", "true");
-          if (quickRoomAnalysis) {
-            form.set("roomAnalysis", JSON.stringify(quickRoomAnalysis));
-          }
+        }
+        if (opts?.keepRoomShape && !opts?.galleryEdit) {
           if (designBrief) {
             const editContextParts = [
               designBrief.cameraAngle ? `Previous camera angle: ${designBrief.cameraAngle}` : "",
@@ -1827,8 +1835,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               form.set("editContext", editContextParts.join("\n"));
             }
           }
-        } else if (!opts?.attachmentOverride?.base64 && quickRoomAnalysis) {
-          form.set("roomAnalysis", JSON.stringify(quickRoomAnalysis));
         }
 
         const doorDesign = designBrief?.doorDesign?.trim();
@@ -1912,7 +1918,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         debug,
       } = await analyzeAndRedesign({
         onPhase: (msg) => setGeneratePhase(resolveGeneratePhase(msg)),
-        roomImageBlob: blob,
+        roomImageBlob: roomBlob ?? null,
         buildGenerateFormData,
         skipGeometry: opts?.keepRoomShape,
         preloadedGeometry: opts?.keepRoomShape
@@ -1952,30 +1958,22 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
       if (json.data?.designBrief) {
         const b = json.data.designBrief;
-        setDesignBrief({
-          subject: b.subject ?? "",
-          style: b.style ?? "",
-          arrangement: b.arrangement ?? "",
-          fullPrompt: b.fullPrompt ?? "",
-          roomType: b.roomType ?? b.room_type ?? "",
-          cameraAngle: b.cameraAngle ?? b.camera_angle ?? "",
-          composition: b.composition ?? "",
-          doorDesign: b.doorDesign ?? b.door_design ?? "",
-        });
+        if (b.fullPrompt?.trim() || b.subject?.trim()) {
+          setDesignBrief({
+            subject: b.subject ?? "",
+            style: b.style ?? "",
+            arrangement: b.arrangement ?? "",
+            fullPrompt: b.fullPrompt ?? "",
+            roomType: b.roomType ?? b.room_type ?? "",
+            cameraAngle: b.cameraAngle ?? b.camera_angle ?? "",
+            composition: b.composition ?? "",
+            doorDesign: b.doorDesign ?? b.door_design ?? "",
+          });
+        }
       }
 
       if (!opts?.keepRoomShape) {
         setLastRoomGeometry(returnedGeometry, returnedGeoFailed);
-        if (returnedGeometry?.polygon_edges?.length && quickRoomAnalysis) {
-          const bbox = bboxFromPolygonEdges(
-            quickRoomAnalysis.room_shape,
-            returnedGeometry.polygon_edges,
-          );
-          patchQuickRoomAnalysis({
-            polygon_edges: returnedGeometry.polygon_edges,
-            estimated_dimensions: { width: bbox.width, depth: bbox.depth },
-          });
-        }
       }
 
       if (json.data?.productLinks) {
@@ -1990,16 +1988,24 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           : tokenAction === "regenerate"
             ? "regenerated"
             : "generated";
-        void persistGeneratedVersion({
-          base64: generatedBase64,
-          mimeType: generatedMime,
-          prompt,
-          feedback: opts?.feedbackText ?? null,
-          designBrief: json.data?.designBrief ?? null,
-          productsUsed: json.data?.productLinks ?? null,
-          roomGeometry: (returnedGeometry ?? null) as Record<string, unknown> | null,
-          type: versionType,
-        });
+        try {
+          const persistResult = await persistGeneratedVersion({
+            base64: generatedBase64,
+            mimeType: generatedMime,
+            prompt,
+            feedback: opts?.feedbackText ?? null,
+            designBrief: json.data?.designBrief ?? null,
+            productsUsed: json.data?.productLinks ?? null,
+            roomGeometry: (returnedGeometry ?? null) as Record<string, unknown> | null,
+            type: versionType,
+          });
+          if (!persistResult.ok && persistResult.reason !== "not_authenticated") {
+            setError(t("page.designPersistFailed"));
+          }
+        } catch (persistErr) {
+          console.warn("[vista:generate] failed to persist generated version:", persistErr);
+          setError(t("page.designPersistFailed"));
+        }
       }
     } catch (err) {
       void refreshTokenBalance();
@@ -2029,7 +2035,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     designMode,
     roomImageBase64,
     roomImageMimeType,
-    quickRoomAnalysis,
+    selectedQuickRoomType,
     isGenerating,
     generatedImageBase64,
     generatedImageMimeType,
@@ -2039,6 +2045,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     inspirationProducts,
     styleInspirations,
     placementMode,
+    shapeCreativity,
     objectRemovalMask,
     selectedCountry,
     searchMode,
@@ -2052,7 +2059,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setDesignBrief,
     setProductLinks,
     setLastRoomGeometry,
-    patchQuickRoomAnalysis,
     tokenBalance,
     setTokenBalance,
     refreshTokenBalance,
@@ -2063,7 +2069,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
   const handleRegenerate = useCallback(() => {
     const prompt = designBrief?.fullPrompt || textPrompt.trim();
-    if (prompt) handleGenerate({ promptOverride: prompt, tokenAction: "regenerate" });
+    if (!prompt) return;
+    setQuickRoomView("result");
+    handleGenerate({ promptOverride: prompt, tokenAction: "regenerate" });
   }, [designBrief, textPrompt, handleGenerate]);
 
   // --- Phased design handlers ---
@@ -2089,7 +2097,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         form.set("countryCode", selectedCountry);
         form.set("searchMode", searchMode);
         form.set("roomImage", blob, "room.jpg");
-        if (quickRoomAnalysis) form.set("roomAnalysis", JSON.stringify(quickRoomAnalysis));
+        form.set("roomType", selectedQuickRoomType);
         if (designBrief?.doorDesign?.trim()) {
           form.set("doorDesign", designBrief.doorDesign.trim());
         }
@@ -2128,7 +2136,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       });
 
       setPhaseResult("base", result.image, result.confirmedProducts);
-      void persistGeneratedVersion({
+      const basePersist = await persistGeneratedVersion({
         base64: result.image.base64,
         mimeType: result.image.mimeType,
         prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
@@ -2136,6 +2144,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         type: "phased",
         phase: "base",
       });
+      if (!basePersist.ok && basePersist.reason !== "not_authenticated") {
+        setError(t("page.designPersistFailed"));
+      }
       track("design_generate_succeeded", { mode: "phased", phase: "base" });
       setPhasedAllProductLinks(result.productLinks);
       setPhasedAllProductIds(result.allPhaseProductIds);
@@ -2194,10 +2205,10 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     }
   }, [
     roomImageBase64, roomImageMimeType, textPrompt, isGenerating, selectedStyle,
-    selectedCountry, searchMode, quickRoomAnalysis, selectedProducts, searchResults,
+    selectedCountry, searchMode, selectedQuickRoomType, selectedProducts, searchResults,
     inspirationProducts, styleInspirations, startPhasedDesign, setIsGenerating, setError, setPhasedStatus,
     setPhaseResult, setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedError, setTokenBalance,
-    setViewpointTrackResult, ensureProject, persistGeneratedVersion,
+    setViewpointTrackResult, ensureProject, persistGeneratedVersion, t,
   ]);
 
   const handleGenerateClick = useCallback(async () => {
@@ -2210,6 +2221,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     }
 
     if (designMode === "custom") {
+      setQuickRoomView("result");
+      setError(null);
       void handleGenerate({ tokenAction: "generate" });
     } else {
       void handleStartPhasedDesign();
@@ -2244,13 +2257,22 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       if (finalImage) {
         setGeneratedImage(finalImage.base64, finalImage.mimeType);
         setProductLinks(phasedAllProductLinks);
-        void persistGeneratedVersion({
-          base64: finalImage.base64,
-          mimeType: finalImage.mimeType,
-          prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
-          productsUsed: phasedAllProductLinks as unknown[] | null,
-          type: "generated",
-        });
+        try {
+          const persistResult = await persistGeneratedVersion({
+            base64: finalImage.base64,
+            mimeType: finalImage.mimeType,
+            prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+            productsUsed: phasedAllProductLinks as unknown[] | null,
+            type: "generated",
+          });
+          if (!persistResult.ok && persistResult.reason !== "not_authenticated") {
+            setError(t("page.designPersistFailed"));
+          }
+        } catch (persistErr) {
+          console.warn("[vista:phased] failed to persist final design version:", persistErr);
+          setError(t("page.designPersistFailed"));
+        }
+        setQuickRoomView("result");
       }
       setPhasedPhase("complete");
       track("design_generate_succeeded", { mode: "phased", phase: "complete" });
@@ -2308,7 +2330,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       form.set("countryCode", selectedCountry);
       form.set("searchMode", searchMode);
       if (roomBlob) form.set("roomImage", roomBlob, "room.jpg");
-      if (quickRoomAnalysis) form.set("roomAnalysis", JSON.stringify(quickRoomAnalysis));
+      form.set("roomType", selectedQuickRoomType);
       if (designBrief?.doorDesign?.trim()) {
         form.set("doorDesign", designBrief.doorDesign.trim());
       }
@@ -2349,7 +2371,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       });
 
       setPhaseResult(nextPhase, result.image, result.confirmedProducts);
-      void persistGeneratedVersion({
+      const phasePersist = await persistGeneratedVersion({
         base64: result.image.base64,
         mimeType: result.image.mimeType,
         prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
@@ -2357,6 +2379,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         type: "phased",
         phase: nextPhase,
       });
+      if (!phasePersist.ok && phasePersist.reason !== "not_authenticated") {
+        setError(t("page.designPersistFailed"));
+      }
       track("design_generate_succeeded", { mode: "phased", phase: nextPhase });
       setPhasedAllProductLinks(result.productLinks);
       setPhasedAllProductIds(result.allPhaseProductIds);
@@ -2389,7 +2414,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               extraForm.set("countryCode", selectedCountry);
               extraForm.set("searchMode", searchMode);
               extraForm.set("roomImage", extraRoomBlob, "room.jpg");
-              if (quickRoomAnalysis) extraForm.set("roomAnalysis", JSON.stringify(quickRoomAnalysis));
+              extraForm.set("roomType", selectedQuickRoomType);
               extraForm.set("tokenAction", "none");
               const extraResult = await runPhasedGeneration({
                 phase: nextPhase,
@@ -2433,10 +2458,10 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   }, [
     isGenerating, phasedCurrentPhase, phasedAllProductLinks,
     roomImageBase64, roomImageMimeType, textPrompt, selectedStyle, selectedCountry,
-    searchMode, quickRoomAnalysis, lastRoomGeometry, selectedProducts, searchResults, inspirationProducts, styleInspirations,
+    searchMode, selectedQuickRoomType, lastRoomGeometry, selectedProducts, searchResults, inspirationProducts, styleInspirations,
     approvePhase, setIsGenerating, setPhasedPhase, setPhasedStatus, setPhaseResult,
     setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedFinalViews, setPhasedError, setTokenBalance, setGeneratedImage, setProductLinks,
-    resetPhasedAnnotation, setViewpointTrackResult, persistGeneratedVersion,
+    resetPhasedAnnotation, setViewpointTrackResult, persistGeneratedVersion, setQuickRoomView, t, setError,
   ]);
 
   const handleRedoPhase = useCallback(async () => {
@@ -2468,7 +2493,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       form.set("countryCode", selectedCountry);
       form.set("searchMode", searchMode);
       if (roomBlob) form.set("roomImage", roomBlob, "room.jpg");
-      if (quickRoomAnalysis) form.set("roomAnalysis", JSON.stringify(quickRoomAnalysis));
+      form.set("roomType", selectedQuickRoomType);
       if (designBrief?.doorDesign?.trim()) {
         form.set("doorDesign", designBrief.doorDesign.trim());
       }
@@ -2505,7 +2530,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       });
 
       setPhaseResult(currentPhase, result.image, result.confirmedProducts);
-      void persistGeneratedVersion({
+      const redoPersist = await persistGeneratedVersion({
         base64: result.image.base64,
         mimeType: result.image.mimeType,
         prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
@@ -2513,6 +2538,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         type: "phased",
         phase: currentPhase,
       });
+      if (!redoPersist.ok && redoPersist.reason !== "not_authenticated") {
+        setError(t("page.designPersistFailed"));
+      }
       setPhasedAllProductLinks(result.productLinks);
       setPhasedAllProductIds(result.allPhaseProductIds);
       if (result.imaginedSlots?.length) {
@@ -2529,9 +2557,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   }, [
     isGenerating, phasedCurrentPhase,
     roomImageBase64, roomImageMimeType, textPrompt, selectedStyle,
-    selectedCountry, searchMode, quickRoomAnalysis, selectedProducts, inspirationProducts, styleInspirations,
+    selectedCountry, searchMode, selectedQuickRoomType, selectedProducts, inspirationProducts, styleInspirations,
     setIsGenerating, setPhasedStatus, setPhaseResult, setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedError, setTokenBalance,
-    resetPhasedAnnotation, persistGeneratedVersion,
+    resetPhasedAnnotation, persistGeneratedVersion, t, setError,
   ]);
 
   const handlePhaseEditSubmit = useCallback(async () => {
@@ -2582,7 +2610,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       form.set("countryCode", selectedCountry);
       form.set("searchMode", searchMode);
       if (roomBlob) form.set("roomImage", roomBlob, "room.jpg");
-      if (quickRoomAnalysis) form.set("roomAnalysis", JSON.stringify(quickRoomAnalysis));
+      form.set("roomType", selectedQuickRoomType);
       if (designBrief?.doorDesign?.trim()) {
         form.set("doorDesign", designBrief.doorDesign.trim());
       }
@@ -2619,7 +2647,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       });
 
       setPhaseResult(currentPhase, result.image, result.confirmedProducts);
-      void persistGeneratedVersion({
+      const redoPersist = await persistGeneratedVersion({
         base64: result.image.base64,
         mimeType: result.image.mimeType,
         prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
@@ -2627,6 +2655,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         type: "phased",
         phase: currentPhase,
       });
+      if (!redoPersist.ok && redoPersist.reason !== "not_authenticated") {
+        setError(t("page.designPersistFailed"));
+      }
       setPhasedAllProductLinks(result.productLinks);
       setPhasedAllProductIds(result.allPhaseProductIds);
       if (result.imaginedSlots?.length) {
@@ -2644,9 +2675,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     phaseEditFeedback, isGenerating, phasedCurrentPhase,
     phasedAnnotatedBase64, phasedAnnotatedMimeType,
     roomImageBase64, roomImageMimeType, textPrompt, selectedStyle,
-    selectedCountry, searchMode, quickRoomAnalysis, selectedProducts, inspirationProducts, styleInspirations,
+    selectedCountry, searchMode, selectedQuickRoomType, selectedProducts, inspirationProducts, styleInspirations,
     setIsGenerating, setPhasedStatus, setPhaseResult, setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedError, setTokenBalance,
-    resetPhasedAnnotation, persistGeneratedVersion,
+    resetPhasedAnnotation, persistGeneratedVersion, t, setError,
   ]);
 
   const handleSkipDecor = useCallback(() => {
@@ -2714,6 +2745,10 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     && generatedImageMimeType
     && (!phasedDesignActive || phasedCurrentPhase === "complete"),
   );
+  const showFinalResultInline = showFinalResult && designMode !== "custom";
+  const showCustomResultOverlay = designMode === "custom" && quickRoomView === "result";
+  const customResultLoading = showCustomResultOverlay && isGenerating && !generatedImageBase64;
+  const quickRoomLoaderPhase = (generatePhase ?? "analysing") as QuickRoomLoaderPhase;
 
   const handleDownloadGenerated = useCallback(() => {
     if (!generatedImageBase64 || !generatedImageMimeType) return;
@@ -2746,6 +2781,15 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   }, []);
 
   const handleCustomInquiry = useCallback(() => {
+    if (!getAuthToken()) {
+      const next =
+        typeof window !== "undefined"
+          ? window.location.pathname + window.location.search
+          : "/";
+      router.push(`/login?next=${encodeURIComponent(next || "/")}`);
+      return;
+    }
+
     const message = t("page.customResultInquiryMessage");
     const phone = (process.env.NEXT_PUBLIC_CONTACT_WHATSAPP || "").replace(/[^\d]/g, "");
     const email = process.env.NEXT_PUBLIC_CONTACT_EMAIL || "";
@@ -2757,13 +2801,30 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     if (url) {
       window.open(url, "_blank", "noopener,noreferrer");
     }
-  }, [t]);
+  }, [router, t]);
 
   const handleSaveDesign = useCallback(async () => {
     const title = saveDesignName.trim() || generateAutoDesignName();
     setSaveDesignSaving(true);
 
-    const projectId = (await ensureProject()) ?? useConsumerDesignStore.getState().currentProjectDbId;
+    const store = useConsumerDesignStore.getState();
+    const projectId = (await ensureProject()) ?? store.currentProjectDbId;
+    if (projectId && store.generatedImageBase64) {
+      const persistResult = await persistGeneratedVersion({
+        base64: store.generatedImageBase64,
+        mimeType: store.generatedImageMimeType ?? "image/png",
+        prompt: store.textPrompt.trim() || null,
+        designBrief: store.designBrief ?? null,
+        productsUsed: store.productLinks ?? null,
+        type: "generated",
+      });
+      if (!persistResult.ok && persistResult.reason !== "not_authenticated") {
+        setError(t("page.designPersistFailed"));
+        setSaveDesignSaving(false);
+        return;
+      }
+    }
+
     if (projectId) {
       await renameProject(projectId, title);
     }
@@ -2774,7 +2835,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setTimeout(() => setSaveDesignModalOpen(false), 1200);
   }, [
     saveDesignName, generateAutoDesignName, renameProject, ensureProject,
-    loadProjects,
+    persistGeneratedVersion, loadProjects, t, setError,
   ]);
 
   const handleDownloadLightbox = useCallback(() => {
@@ -2788,26 +2849,36 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const handleEditSubmit = useCallback(() => {
     const feedback = editFeedback.trim();
     if (!feedback) return;
-    const base = designBrief?.fullPrompt || textPrompt.trim();
-    const newPrompt = base
-      ? `${base}\n\nUser refinement: ${feedback}`
-      : feedback;
+    setQuickRoomView("result");
     const attachment = chatAttachment ?? undefined;
     setEditFeedback("");
     setChatAttachment(null);
 
-    const hasAnnotation = annotatedImageBase64 && annotatedImageMimeType;
-    const useGeneratedAsRef = !attachment && generatedImageBase64 && generatedImageMimeType;
+    const hasAnnotation = !!(annotatedImageBase64 && annotatedImageMimeType);
+    const useGeneratedAsRef = !attachment && !!(generatedImageBase64 && generatedImageMimeType);
+    const galleryEdit = !!(useGeneratedAsRef || (hasAnnotation && !attachment));
+
     handleGenerate({
-      promptOverride: newPrompt,
+      promptOverride: galleryEdit
+        ? (designBrief?.fullPrompt || textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT)
+        : (designBrief?.fullPrompt || textPrompt.trim()
+          ? `${designBrief?.fullPrompt || textPrompt.trim()}\n\nUser refinement: ${feedback}`
+          : feedback),
       feedbackText: feedback,
       tokenAction: "edit",
-      attachmentOverride: hasAnnotation
-        ? { base64: annotatedImageBase64!, mimeType: annotatedImageMimeType! }
-        : useGeneratedAsRef
-          ? { base64: generatedImageBase64!, mimeType: generatedImageMimeType! }
+      galleryEdit,
+      editFeedback: feedback,
+      hasEditAnnotation: hasAnnotation && !attachment,
+      attachmentOverride: galleryEdit && generatedImageBase64 && generatedImageMimeType
+        ? { base64: generatedImageBase64, mimeType: generatedImageMimeType }
+        : hasAnnotation
+          ? { base64: annotatedImageBase64!, mimeType: annotatedImageMimeType! }
           : attachment,
-      keepRoomShape: !!(hasAnnotation || useGeneratedAsRef),
+      editAnnotationOverride:
+        galleryEdit && hasAnnotation && !attachment
+          ? { base64: annotatedImageBase64!, mimeType: annotatedImageMimeType! }
+          : undefined,
+      keepRoomShape: galleryEdit || !!(hasAnnotation || useGeneratedAsRef),
     });
   }, [editFeedback, chatAttachment, designBrief, textPrompt, generatedImageBase64, generatedImageMimeType, annotatedImageBase64, annotatedImageMimeType, handleGenerate]);
 
@@ -2835,6 +2906,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     const count = useConsumerDesignStore
       .getState()
       .savedProjects.filter((p) => p.mode === hubMode).length;
+    if (count === 0 && mode === "quick") {
+      useConsumerDesignStore.getState().resetQuickRoom();
+    }
     router.push(count === 0 ? workspace : hub);
     if (getAuthToken()) {
       void loadProjects({ mode: hubMode });
@@ -2853,6 +2927,280 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     );
   }
 
+  const quickRoomResultPanel = showFinalResult ? (
+    <div className="w-full flex flex-col gap-4">
+                {/* Room type & camera angle only — no long AI finish description */}
+                {designBrief && (designBrief.roomType || designBrief.cameraAngle) && (
+                  <div className="flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl bg-[var(--primary)]/5 border border-[var(--primary)]/20">
+                    {designBrief.roomType && (
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--foreground)] bg-[var(--muted)] px-2.5 py-1 rounded-full">
+                        <Home size={12} className="text-[var(--primary)]" />
+                        {roomTypeLabel(designBrief.roomType)}
+                      </span>
+                    )}
+                    {designBrief.cameraAngle && (
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--foreground)] bg-[var(--muted)] px-2.5 py-1 rounded-full">
+                        <Camera size={12} className="text-[var(--primary)]" />
+                        {designBrief.cameraAngle}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Generated images — compact grid when multiple angles, capped single hero otherwise */}
+                {markerMode ? (
+                  <DrawingCanvas
+                    imageSrc={`data:${generatedImageMimeType};base64,${generatedImageBase64}`}
+                    onAnnotatedImage={(base64, mime) => {
+                      setAnnotatedImageBase64(base64);
+                      setAnnotatedImageMimeType(mime);
+                    }}
+                    onFinish={() => setMarkerMode(false)}
+                    className="cd-reveal"
+                  />
+                ) : phasedFinalViews.length > 1 ? (
+                  <RoomRenderGalleryGrid className="cd-reveal">
+                    {phasedFinalViews.map((view, i) => {
+                      const isActive = view.base64 === generatedImageBase64;
+                      return (
+                        <RoomRenderGalleryCard
+                          key={view.id}
+                          src={`data:${view.mimeType};base64,${view.base64}`}
+                          alt={t("page.generatedInterior")}
+                          viewLabel={`View ${i + 1}`}
+                          isActive={isActive}
+                          activeLabel={t("page.activeRender")}
+                          setActiveLabel={t("page.setActiveRender")}
+                          onSetActive={() => !isGenerating && setGeneratedImage(view.base64, view.mimeType)}
+                          onOpen={() =>
+                            !isGenerating &&
+                            setLightboxSrc(`data:${view.mimeType};base64,${view.base64}`)
+                          }
+                          onRemove={() => removePhasedFinalView(view.id)}
+                          canRemove={!isGenerating}
+                          removeLabel={t("page.removeRenderImage")}
+                          disabled={isGenerating}
+                          borderClassName={
+                            isActive
+                              ? "border-[var(--primary)] ring-1 ring-[var(--primary)]"
+                              : "border-[var(--border)]"
+                          }
+                        />
+                      );
+                    })}
+                  </RoomRenderGalleryGrid>
+                ) : (
+                  <div
+                    className="cd-reveal rounded-2xl overflow-hidden border border-[var(--border)] cursor-pointer hover:shadow-lg transition-shadow relative"
+                    onClick={() =>
+                      !isGenerating &&
+                      setLightboxSrc(`data:${generatedImageMimeType};base64,${generatedImageBase64}`)
+                    }
+                  >
+                    <img
+                      src={`data:${generatedImageMimeType};base64,${generatedImageBase64}`}
+                      alt={t("page.generatedInterior")}
+                      className={`w-full max-h-[55vh] object-contain transition-opacity ${isGenerating ? "opacity-50" : ""}`}
+                    />
+                    {isGenerating && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 rounded-2xl">
+                        <Loader2 size={32} className="animate-spin text-white" />
+                        <p className="text-white text-sm font-medium mt-2">{t("page.generatingNewDesign")}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Action buttons — Download is primary; regenerate/mark are secondary */}
+                <div className={`flex gap-3 ${isMobile ? "flex-col" : ""}`}>
+                  <button
+                    type="button"
+                    onClick={handleDownloadGenerated}
+                    disabled={isGenerating}
+                    className={`${isMobile ? "w-full" : "flex-1"} py-3 rounded-xl bg-orange-500 text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-50`}
+                    title={t("page.downloadDesign")}
+                  >
+                    <Download size={18} /> {t("page.downloadDesign")}
+                  </button>
+                  <div className={`flex gap-3 ${isMobile ? "w-full" : ""}`}>
+                  <button
+                    onClick={handleRegenerate}
+                    disabled={isGenerating || (tokenBalance !== null && tokenBalance < TOKEN_COSTS.regenerate)}
+                    className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50`}
+                    title={t("tokens.regenerate")}
+                  >
+                    <RefreshCw size={18} /> {t("tokens.regenerate")}
+                  </button>
+                  <button
+                    onClick={() => setMarkerMode((on) => !on)}
+                    disabled={isGenerating}
+                    className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
+                      markerMode
+                        ? "bg-[var(--primary)] text-white"
+                        : "bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50"
+                    }`}
+                    title={t("components.drawOnImage")}
+                  >
+                    <PenTool size={18} />
+                    {!isMobile && t("common.mark")}
+                  </button>
+                  {currentProjectDbId && getAuthToken() && (
+                    <button
+                      type="button"
+                      onClick={() => setShareModalOpen(true)}
+                      disabled={isGenerating}
+                      className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50`}
+                      title={t("share.title")}
+                    >
+                      <Share2 size={18} />
+                      {!isMobile && t("share.title")}
+                    </button>
+                  )}
+                  </div>
+                </div>
+
+                {/* Chat-style edit input with image attachment */}
+                <div className="flex flex-col gap-2">
+                  {annotatedImageBase64 && !chatAttachment && (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--primary)]/10 border border-[var(--primary)]/30">
+                      <img
+                        src={`data:image/png;base64,${annotatedImageBase64}`}
+                        alt={t("components.attachReference")}
+                        className="w-10 h-10 rounded object-cover border border-[var(--primary)]/40 shrink-0"
+                      />
+                      <p className="text-xs text-[var(--primary)] font-medium flex-1">{t("components.markedAreasSent")}</p>
+                      <button
+                        onClick={() => { setAnnotatedImageBase64(null); setAnnotatedImageMimeType(null); }}
+                        className={`${isMobile ? "p-1.5" : "p-0.5"} rounded-full cd-media-icon-btn transition-colors cursor-pointer shrink-0`}
+                      >
+                        <X size={isMobile ? 14 : 12} />
+                      </button>
+                    </div>
+                  )}
+                  {chatAttachment && (
+                    <div className="relative w-20 h-20 rounded-lg overflow-hidden border border-[var(--border)]">
+                      <img src={chatAttachment.preview} alt={t("components.attachReference")} className="w-full h-full object-cover" />
+                      <button
+                        onClick={() => setChatAttachment(null)}
+                        className={`absolute top-1 right-1 ${isMobile ? "p-1.5" : "p-0.5"} rounded-full cd-media-icon-btn transition-colors cursor-pointer`}
+                      >
+                        <X size={isMobile ? 14 : 12} />
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex gap-2 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => chatImageRef.current?.click()}
+                      disabled={isGenerating}
+                      className="shrink-0 px-3 py-3 rounded-xl bg-[var(--muted)] border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/50 transition-all cursor-pointer disabled:opacity-50"
+                      title={t("components.attachReference")}
+                    >
+                      <Paperclip size={16} />
+                    </button>
+                    <input ref={chatImageRef} type="file" accept="image/*" onChange={handleChatImageSelect} className="hidden" />
+                    <input
+                      type="text"
+                      value={editFeedback}
+                      onChange={(e) => setEditFeedback(e.target.value)}
+                      placeholder={t("page.describeChangesPlaceholder")}
+                      className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[var(--muted)] border border-[var(--border)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/50 focus:border-[var(--primary)] transition-all"
+                      onKeyDown={(e) => { if (e.key === "Enter" && editFeedback.trim()) handleEditSubmit(); }}
+                      disabled={isGenerating}
+                    />
+                    <button
+                      onClick={handleEditSubmit}
+                      disabled={
+                        !editFeedback.trim() ||
+                        isGenerating ||
+                        (tokenBalance !== null && tokenBalance < TOKEN_COSTS.edit)
+                      }
+                      className="shrink-0 px-4 sm:px-5 py-3 rounded-xl bg-[var(--primary)] text-white font-semibold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-50"
+                      title={t("tokens.editWithChat")}
+                    >
+                      <Send size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Version history */}
+                {designHistory.length > 0 && (
+                  <div className="w-full">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Clock size={14} className="text-[var(--muted-foreground)]" />
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                        {t("page.previousVersions", { count: designHistory.length })}
+                      </h4>
+                    </div>
+                    <div className={`grid ${isMobile ? "grid-cols-2" : "grid-cols-3"} gap-3`}>
+                      {designHistory.map((v) => (
+                        <div key={v.id} className="group relative">
+                          <div
+                            className="rounded-xl overflow-hidden border border-[var(--border)] cursor-pointer hover:border-[var(--primary)]/50 transition-all hover:shadow-md"
+                            onClick={() => setLightboxSrc(`data:${v.imageMimeType};base64,${v.imageBase64}`)}
+                          >
+                            <img
+                              src={`data:${v.imageMimeType};base64,${v.imageBase64}`}
+                              alt={v.brief?.subject || t("page.previousDesign")}
+                              className="w-full aspect-[4/3] object-cover"
+                            />
+                            <button
+                              onClick={(e) => { e.stopPropagation(); restoreDesignVersion(v.id); }}
+                              className={`absolute top-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[10px] font-medium hover:bg-black/90 cursor-pointer ${isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100 transition-opacity"}`}
+                              title={t("components.useVersionAsRef")}
+                            >
+                              {t("components.useAsRef")}
+                            </button>
+                          </div>
+                          <div className="mt-1.5 px-0.5">
+                            <p className="text-[11px] font-medium truncate">{v.brief?.subject || t("page.design")}</p>
+                            {v.feedback && (
+                              <p className="text-[10px] text-[var(--muted-foreground)] truncate">{t("page.editQuote", { feedback: v.feedback })}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {designMode === "custom" && (
+                  <div className="w-full rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+                    <h3 className="text-sm font-bold mb-2 flex items-center gap-2">
+                      <Sparkles size={16} className="text-[var(--primary)]" />
+                      {t("page.customResultTitle")}
+                    </h3>
+                    <p className="text-sm text-[var(--muted-foreground)] mb-4">
+                      {t("page.customResultBlurb")}
+                    </p>
+                    {!getAuthToken() && (
+                      <p className="text-xs text-[var(--muted-foreground)] mb-4">
+                        {t("page.customResultLoginNote")}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleCustomInquiry}
+                      className="w-full py-3 rounded-xl bg-[var(--primary)] text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer"
+                    >
+                      <Send size={18} />
+                      {getAuthToken() ? t("page.customResultCta") : t("page.customResultSignInCta")}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenSaveDesign}
+                      disabled={saveDesignDone}
+                      className="mt-3 w-full py-3 rounded-xl border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] font-bold flex items-center justify-center gap-2 hover:brightness-105 transition-all cursor-pointer disabled:opacity-60"
+                    >
+                      {saveDesignDone ? <Check size={18} /> : <Save size={18} />}
+                      {saveDesignDone ? t("page.designSaved") : t("page.saveDesign")}
+                    </button>
+                  </div>
+                )}
+    </div>
+  ) : null;
+
   return (
     <div className={`cd-page${uiTheme === "light" ? " cd-page--light" : ""}${keyboardOpen ? " cd-page--keyboard-open" : ""}`} suppressHydrationWarning>
       {/* ── Editorial header ── */}
@@ -2864,11 +3212,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               className="cd-back-link"
               onClick={() => {
                 if (hubPath) {
-                  const hubMode = hubPath === "/quick" ? "quick_room" : "project";
-                  const count = useConsumerDesignStore
-                    .getState()
-                    .savedProjects.filter((p) => p.mode === hubMode).length;
-                  router.push(count === 0 ? "/" : hubPath);
+                  router.push(hubPath);
                 } else {
                   router.push("/");
                 }
@@ -3376,338 +3720,24 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
             )}
 
             {roomImageBase64 && vistaMode === "quick" && (
-              <div className="w-full rounded-xl border border-[var(--border)] bg-[var(--muted)]/50 p-4 flex flex-col gap-3">
-                {quickRoomAnalyzing && (
-                  <div className="flex items-center gap-2.5 text-sm text-[var(--muted-foreground)]">
-                    <Loader2 className="animate-spin shrink-0" size={18} />
-                    <span>{t("page.scanningGeometry")}</span>
-                  </div>
-                )}
-                {quickRoomAnalyzeError && !quickRoomAnalyzing && (
-                  <div className="flex flex-col gap-2">
-                    <p className="text-sm text-red-400 flex items-start gap-2">
-                      <AlertCircle size={16} className="shrink-0 mt-0.5" />
-                      {quickRoomAnalyzeError}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setQuickRoomAnalysis(null);
-                        setQuickAnalyzeNonce((n) => n + 1);
-                      }}
-                      className="self-start text-sm font-semibold text-[var(--primary)] underline-offset-2 hover:underline cursor-pointer"
-                    >
-                      {t("page.retryScan")}
-                    </button>
-                  </div>
-                )}
-                {quickRoomAnalysis && !quickRoomAnalyzing && !quickRoomAnalyzeError && (
-                  <>
-                    {(() => {
-                      const qa = quickRoomAnalysis;
-                      const mandatoryGate = quickRoomNeedsMandatorySpatialClarification(qa);
-                      const dims = qa.estimated_dimensions;
-                      const showEditor = quickRoomFactsExpanded;
-
-                      const lowNote = (spatial: boolean) =>
-                        spatial ? (
-                          <span className="text-amber-500/90 flex items-center gap-1 shrink-0" title={t("page.aiUnsureVerify")}>
-                            <AlertCircle size={13} /> {t("common.review")}
-                          </span>
-                        ) : null;
-
-                      return (
-                        <>
-                          {!showEditor ? (
-                            <button
-                              type="button"
-                              onClick={() => setQuickRoomFactsExpanded(true)}
-                              className="w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)]/40 transition-colors cursor-pointer"
-                            >
-                              <span className="text-sm font-medium truncate">
-                                {t("page.roomScanSummary", {
-                                  roomType: roomTypeLabel(qa.room_type),
-                                  width: dims.width.toFixed(1),
-                                  depth: dims.depth.toFixed(1),
-                                  height: dims.height.toFixed(1),
-                                  windowCount: qa.window_count,
-                                  doorCount: qa.door_count,
-                                })}
-                              </span>
-                              <span className="flex items-center gap-2 shrink-0">
-                                {mandatoryGate ? lowNote(true) : null}
-                                <ChevronDown size={18} className="text-[var(--muted-foreground)]" />
-                              </span>
-                            </button>
-                          ) : (
-                            <div className="flex flex-col gap-3">
-                              <button
-                                type="button"
-                                onClick={() => setQuickRoomFactsExpanded(false)}
-                                className="self-end flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] cursor-pointer"
-                              >
-                                <ChevronDown size={14} className="rotate-180" /> {t("common.collapse")}
-                              </button>
-
-                              <div className="grid gap-3 sm:grid-cols-2">
-                                <label className="flex flex-col gap-1">
-                                  <span className="text-xs font-medium text-[var(--muted-foreground)]">{t("page.roomType")}</span>
-                                  <select
-                                    value={qa.room_type}
-                                    onChange={(e) => patchQuickRoomAnalysis({ room_type: e.target.value })}
-                                    className="rounded-lg px-3 py-2 text-sm bg-[var(--card)] border border-[var(--border)]"
-                                  >
-                                    {!(ROOM_TYPES as readonly string[]).includes(qa.room_type) ? (
-                                      <option value={qa.room_type}>{roomTypeLabel(qa.room_type)}</option>
-                                    ) : null}
-                                    {ROOM_TYPES.map((rt) => (
-                                      <option key={rt} value={rt}>
-                                        {roomTypeLabel(rt)}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <label className="flex flex-col gap-1">
-                                  <span className="flex items-center justify-between gap-2">
-                                    <span className="text-xs font-medium text-[var(--muted-foreground)]">{t("page.roomShape")}</span>
-                                    {!qa.confidence || qa.confidence.room_type !== "high" ? lowNote(true) : null}
-                                  </span>
-                                  <select
-                                    value={qa.room_shape}
-                                    onChange={(e) => {
-                                      const nextShape = e.target.value;
-                                      const syncedEdges = syncPolygonEdgesForShape(
-                                        nextShape,
-                                        dims.width,
-                                        dims.depth,
-                                        nextShape === qa.room_shape ? qa.polygon_edges : undefined,
-                                      );
-                                      patchQuickRoomAnalysis({
-                                        room_shape: nextShape,
-                                        polygon_edges: syncedEdges,
-                                      });
-                                    }}
-                                    className="rounded-lg px-3 py-2 text-sm bg-[var(--card)] border border-[var(--border)]"
-                                  >
-                                    {!(ROOM_SHAPES as readonly string[]).includes(qa.room_shape) ? (
-                                      <option value={qa.room_shape}>{roomShapeLabel(qa.room_shape)}</option>
-                                    ) : null}
-                                    {ROOM_SHAPES.map((shape) => (
-                                      <option key={shape} value={shape}>
-                                        {roomShapeLabel(shape)}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                              </div>
-
-                              {roomShapeUsesPolygonEditor(qa.room_shape) &&
-                              qa.polygon_edges &&
-                              qa.polygon_edges.length > 0 ? (
-                                <>
-                                <p className="text-xs text-[var(--muted-foreground)]">{t("page.polygonFootprintHint")}</p>
-                                <RoomShapeEditor
-                                  roomShape={qa.room_shape}
-                                  edges={qa.polygon_edges}
-                                  ceilingHeight={dims.height}
-                                  lowConfidence={effectiveQuickRoomSpatialConfidence(qa, "dimensions") !== "high"}
-                                  lowConfidenceLabel={t("common.review")}
-                                  edgeLabel={(label) => t("page.edgeLengthM", { edge: label })}
-                                  ceilingLabel={t("page.ceilingM")}
-                                  onEdgesChange={(nextEdges) => {
-                                    const bbox = bboxFromPolygonEdges(qa.room_shape, nextEdges);
-                                    patchQuickRoomAnalysis({
-                                      polygon_edges: nextEdges,
-                                      estimated_dimensions: {
-                                        width: bbox.width,
-                                        depth: bbox.depth,
-                                      },
-                                    });
-                                  }}
-                                  onCeilingChange={(val) => {
-                                    patchQuickRoomAnalysis({ estimated_dimensions: { height: val } });
-                                  }}
-                                />
-                                </>
-                              ) : (
-                                <div className="grid gap-3 sm:grid-cols-3">
-                                  {(["width", "depth", "height"] as const).map((k) => (
-                                    <label key={k} className="flex flex-col gap-1">
-                                      <span className="flex items-center justify-between gap-2">
-                                        <span className="text-xs font-medium text-[var(--muted-foreground)]">
-                                          {k === "width" ? t("page.widthM") : k === "depth" ? t("page.depthM") : t("page.ceilingM")}
-                                        </span>
-                                        {effectiveQuickRoomSpatialConfidence(qa, "dimensions") !== "high" ? lowNote(true) : null}
-                                      </span>
-                                      <input
-                                        type="number"
-                                        step={0.1}
-                                        min={0}
-                                        value={dims[k]}
-                                        onChange={(e) => {
-                                          const v = parseFloat(e.target.value);
-                                          const val = Number.isFinite(v) ? v : 0;
-                                          if (k === "width") {
-                                            patchQuickRoomAnalysis({ estimated_dimensions: { width: val } });
-                                          } else if (k === "depth") {
-                                            patchQuickRoomAnalysis({ estimated_dimensions: { depth: val } });
-                                          } else {
-                                            patchQuickRoomAnalysis({ estimated_dimensions: { height: val } });
-                                          }
-                                        }}
-                                        className="rounded-lg px-3 py-2 text-sm bg-[var(--card)] border border-[var(--border)]"
-                                      />
-                                    </label>
-                                  ))}
-                                </div>
-                              )}
-
-                              <div className="grid gap-3 sm:grid-cols-2">
-                                <label className="flex flex-col gap-1">
-                                  <span className="flex items-center justify-between gap-2">
-                                    <span className="text-xs font-medium text-[var(--muted-foreground)]">{t("page.windows")}</span>
-                                    {effectiveQuickRoomSpatialConfidence(qa, "window_count") !== "high"
-                                      ? lowNote(true)
-                                      : null}
-                                  </span>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    max={20}
-                                    step={1}
-                                    value={qa.window_count}
-                                    onChange={(e) => {
-                                      const n = Math.max(0, Math.min(20, parseInt(e.target.value, 10) || 0));
-                                      patchQuickRoomAnalysis({ window_count: n });
-                                    }}
-                                    className="rounded-lg px-3 py-2 text-sm bg-[var(--card)] border border-[var(--border)]"
-                                  />
-                                </label>
-                                <label className="flex flex-col gap-1">
-                                  <span className="flex items-center justify-between gap-2">
-                                    <span className="text-xs font-medium text-[var(--muted-foreground)]">{t("page.doors")}</span>
-                                    {effectiveQuickRoomSpatialConfidence(qa, "door_count") !== "high"
-                                      ? lowNote(true)
-                                      : null}
-                                  </span>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    max={20}
-                                    step={1}
-                                    value={qa.door_count}
-                                    onChange={(e) => {
-                                      const n = Math.max(0, Math.min(20, parseInt(e.target.value, 10) || 0));
-                                      patchQuickRoomAnalysis({ door_count: n });
-                                    }}
-                                    className="rounded-lg px-3 py-2 text-sm bg-[var(--card)] border border-[var(--border)]"
-                                  />
-                                </label>
-                              </div>
-
-                              {process.env.NEXT_PUBLIC_VISTA_OPENING_EDITOR === "1" &&
-                                roomImageBase64 &&
-                                roomImageMimeType &&
-                                !generatedImageBase64 && (
-                                  <div className="flex flex-col gap-1">
-                                    <span className="text-xs font-medium text-[var(--muted-foreground)]">
-                                      {t("page.openingBoxesHint")}
-                                    </span>
-                                    <OpeningBoxEditor
-                                      imageBase64={roomImageBase64}
-                                      imageMimeType={roomImageMimeType}
-                                      windowBoxes={qa.window_boxes ?? []}
-                                      doorBoxes={qa.door_boxes ?? []}
-                                      windowLabel={t("page.windows")}
-                                      doorLabel={t("page.doors")}
-                                      onChange={({ window_boxes, door_boxes }) =>
-                                        patchQuickRoomAnalysis({ window_boxes, door_boxes })
-                                      }
-                                    />
-                                  </div>
-                                )}
-
-                              <label className="flex flex-col gap-1">
-                                <span className="text-xs font-medium text-[var(--muted-foreground)]">
-                                  {t("page.ceilingType")}
-                                </span>
-                                <select
-                                  value={qa.ceiling_type}
-                                  onChange={(e) => patchQuickRoomAnalysis({ ceiling_type: e.target.value })}
-                                  className="rounded-lg px-3 py-2 text-sm bg-[var(--card)] border border-[var(--border)]"
-                                >
-                                  {!(CEILING_TYPES as readonly string[]).includes(qa.ceiling_type) ? (
-                                    <option value={qa.ceiling_type}>{ceilingTypeLabel(qa.ceiling_type)}</option>
-                                  ) : null}
-                                  {CEILING_TYPES.map((ct) => (
-                                    <option key={ct} value={ct}>
-                                      {ceilingTypeLabel(ct)}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-
-                              <label className="flex flex-col gap-1">
-                                <span className="text-xs font-medium text-[var(--muted-foreground)]">
-                                  {t("page.windowPositions")}
-                                </span>
-                                <textarea
-                                  rows={2}
-                                  value={qa.window_positions.join("\n")}
-                                  onChange={(e) => {
-                                    const lines = e.target.value
-                                      .split("\n")
-                                      .map((s) => s.trim())
-                                      .filter(Boolean);
-                                    patchQuickRoomAnalysis({ window_positions: lines });
-                                  }}
-                                  className="rounded-lg px-3 py-2 text-xs font-mono bg-[var(--card)] border border-[var(--border)] resize-y min-h-[48px]"
-                                />
-                              </label>
-
-                              <label className="flex flex-col gap-1">
-                                <span className="text-xs font-medium text-[var(--muted-foreground)]">
-                                  {t("page.doorPositions")}
-                                </span>
-                                <textarea
-                                  rows={2}
-                                  value={qa.door_positions.join("\n")}
-                                  onChange={(e) => {
-                                    const lines = e.target.value
-                                      .split("\n")
-                                      .map((s) => s.trim())
-                                      .filter(Boolean);
-                                    patchQuickRoomAnalysis({ door_positions: lines });
-                                  }}
-                                  className="rounded-lg px-3 py-2 text-xs font-mono bg-[var(--card)] border border-[var(--border)] resize-y min-h-[48px]"
-                                />
-                              </label>
-
-                              <label className="flex flex-col gap-1">
-                                <span className="text-xs font-medium text-[var(--muted-foreground)]">
-                                  {t("page.structuralElements")}
-                                </span>
-                                <textarea
-                                  rows={2}
-                                  value={qa.structural_elements.join("\n")}
-                                  onChange={(e) => {
-                                    const lines = e.target.value
-                                      .split("\n")
-                                      .map((s) => s.trim())
-                                      .filter(Boolean);
-                                    patchQuickRoomAnalysis({ structural_elements: lines });
-                                  }}
-                                  className="rounded-lg px-3 py-2 text-xs font-mono bg-[var(--card)] border border-[var(--border)] resize-y min-h-[48px]"
-                                />
-                              </label>
-
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </>
-                )}
+              <div className="w-full rounded-xl border border-[var(--border)] bg-[var(--muted)]/50 p-4 flex flex-col gap-2">
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-[var(--muted-foreground)]">{t("page.roomType")}</span>
+                  <select
+                    value={selectedQuickRoomType}
+                    onChange={(e) => setSelectedQuickRoomType(e.target.value as typeof selectedQuickRoomType)}
+                    className="rounded-lg px-3 py-2.5 text-sm bg-[var(--card)] border border-[var(--border)]"
+                  >
+                    {ROOM_TYPES.map((rt) => (
+                      <option key={rt} value={rt}>
+                        {roomTypeLabel(rt)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="text-xs text-[var(--muted-foreground)] leading-snug">
+                  {t("page.quickRoomTypeHint")}
+                </p>
               </div>
             )}
 
@@ -3735,6 +3765,34 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                   : t("page.placementModeHint")}
               </p>
             </div>
+
+            {placementMode === "redesign" && designMode === "custom" && (
+              <div className="w-full flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="cd-field-label">{t("page.shapeCreativityLabel")}</span>
+                  <span className="text-xs text-[var(--muted-foreground)] tabular-nums">
+                    {shapeCreativity}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={10}
+                  step={1}
+                  value={shapeCreativity}
+                  onChange={(e) => setShapeCreativity(Number(e.target.value))}
+                  className="w-full"
+                  aria-label={t("page.shapeCreativityLabel")}
+                />
+                <div className="flex justify-between text-xs text-[var(--muted-foreground)]">
+                  <span>{t("page.shapeCreativityKeepShape")}</span>
+                  <span>{t("page.shapeCreativityCreative")}</span>
+                </div>
+                <p className="text-xs text-[var(--muted-foreground)] leading-snug">
+                  {t("page.shapeCreativityHint")}
+                </p>
+              </div>
+            )}
 
             {placementMode === "redesign" && (
             <div className="w-full flex flex-col gap-2">
@@ -3852,7 +3910,12 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     : "bg-[var(--muted)] text-[var(--muted-foreground)] cursor-not-allowed"
                 }`}
               >
-                {isGenerating ? (
+                {isGenerating && designMode === "custom" && quickRoomView === "result" ? (
+                  <>
+                    <Sparkles size={20} />
+                    {t("page.generateDesign")}
+                  </>
+                ) : isGenerating ? (
                   <>
                     <Loader2 size={20} className="animate-spin" />
                     {generateButtonLoadingMessage}
@@ -4036,234 +4099,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               </div>
             )}
 
-            {showFinalResult && (
-              <div className="w-full flex flex-col gap-4">
-                {/* Room type & camera angle only — no long AI finish description */}
-                {designBrief && (designBrief.roomType || designBrief.cameraAngle) && (
-                  <div className="flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl bg-[var(--primary)]/5 border border-[var(--primary)]/20">
-                    {designBrief.roomType && (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--foreground)] bg-[var(--muted)] px-2.5 py-1 rounded-full">
-                        <Home size={12} className="text-[var(--primary)]" />
-                        {roomTypeLabel(designBrief.roomType)}
-                      </span>
-                    )}
-                    {designBrief.cameraAngle && (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--foreground)] bg-[var(--muted)] px-2.5 py-1 rounded-full">
-                        <Camera size={12} className="text-[var(--primary)]" />
-                        {designBrief.cameraAngle}
-                      </span>
-                    )}
-                  </div>
-                )}
+            {showFinalResultInline && quickRoomResultPanel}
 
-                {/* Generated images — compact grid when multiple angles, capped single hero otherwise */}
-                {markerMode ? (
-                  <DrawingCanvas
-                    imageSrc={`data:${generatedImageMimeType};base64,${generatedImageBase64}`}
-                    onAnnotatedImage={(base64, mime) => {
-                      setAnnotatedImageBase64(base64);
-                      setAnnotatedImageMimeType(mime);
-                    }}
-                    onFinish={() => setMarkerMode(false)}
-                    className="cd-reveal"
-                  />
-                ) : phasedFinalViews.length > 1 ? (
-                  <RoomRenderGalleryGrid className="cd-reveal">
-                    {phasedFinalViews.map((view, i) => {
-                      const isActive = view.base64 === generatedImageBase64;
-                      return (
-                        <RoomRenderGalleryCard
-                          key={view.id}
-                          src={`data:${view.mimeType};base64,${view.base64}`}
-                          alt={t("page.generatedInterior")}
-                          viewLabel={`View ${i + 1}`}
-                          isActive={isActive}
-                          activeLabel={t("page.activeRender")}
-                          setActiveLabel={t("page.setActiveRender")}
-                          onSetActive={() => !isGenerating && setGeneratedImage(view.base64, view.mimeType)}
-                          onOpen={() =>
-                            !isGenerating &&
-                            setLightboxSrc(`data:${view.mimeType};base64,${view.base64}`)
-                          }
-                          onRemove={() => removePhasedFinalView(view.id)}
-                          canRemove={!isGenerating}
-                          removeLabel={t("page.removeRenderImage")}
-                          disabled={isGenerating}
-                          borderClassName={
-                            isActive
-                              ? "border-[var(--primary)] ring-1 ring-[var(--primary)]"
-                              : "border-[var(--border)]"
-                          }
-                        />
-                      );
-                    })}
-                  </RoomRenderGalleryGrid>
-                ) : (
-                  <div
-                    className="cd-reveal rounded-2xl overflow-hidden border border-[var(--border)] cursor-pointer hover:shadow-lg transition-shadow relative"
-                    onClick={() =>
-                      !isGenerating &&
-                      setLightboxSrc(`data:${generatedImageMimeType};base64,${generatedImageBase64}`)
-                    }
-                  >
-                    <img
-                      src={`data:${generatedImageMimeType};base64,${generatedImageBase64}`}
-                      alt={t("page.generatedInterior")}
-                      className={`w-full max-h-[55vh] object-contain transition-opacity ${isGenerating ? "opacity-50" : ""}`}
-                    />
-                    {isGenerating && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 rounded-2xl">
-                        <Loader2 size={32} className="animate-spin text-white" />
-                        <p className="text-white text-sm font-medium mt-2">{t("page.generatingNewDesign")}</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Action buttons — Download is primary; regenerate/mark are secondary */}
-                <div className={`flex gap-3 ${isMobile ? "flex-col" : ""}`}>
-                  <button
-                    type="button"
-                    onClick={handleDownloadGenerated}
-                    disabled={isGenerating}
-                    className={`${isMobile ? "w-full" : "flex-1"} py-3 rounded-xl bg-orange-500 text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-50`}
-                    title={t("page.downloadDesign")}
-                  >
-                    <Download size={18} /> {t("page.downloadDesign")}
-                  </button>
-                  <div className={`flex gap-3 ${isMobile ? "w-full" : ""}`}>
-                  <button
-                    onClick={handleRegenerate}
-                    disabled={isGenerating || (tokenBalance !== null && tokenBalance < TOKEN_COSTS.regenerate)}
-                    className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50`}
-                    title={t("tokens.regenerate")}
-                  >
-                    <RefreshCw size={18} /> {t("tokens.regenerate")}
-                  </button>
-                  <button
-                    onClick={() => setMarkerMode((on) => !on)}
-                    disabled={isGenerating}
-                    className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
-                      markerMode
-                        ? "bg-[var(--primary)] text-white"
-                        : "bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50"
-                    }`}
-                    title={t("components.drawOnImage")}
-                  >
-                    <PenTool size={18} />
-                    {!isMobile && t("common.mark")}
-                  </button>
-                  </div>
-                </div>
-
-                {/* Chat-style edit input with image attachment */}
-                <div className="flex flex-col gap-2">
-                  {annotatedImageBase64 && !chatAttachment && (
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--primary)]/10 border border-[var(--primary)]/30">
-                      <img
-                        src={`data:image/png;base64,${annotatedImageBase64}`}
-                        alt={t("components.attachReference")}
-                        className="w-10 h-10 rounded object-cover border border-[var(--primary)]/40 shrink-0"
-                      />
-                      <p className="text-xs text-[var(--primary)] font-medium flex-1">{t("components.markedAreasSent")}</p>
-                      <button
-                        onClick={() => { setAnnotatedImageBase64(null); setAnnotatedImageMimeType(null); }}
-                        className={`${isMobile ? "p-1.5" : "p-0.5"} rounded-full cd-media-icon-btn transition-colors cursor-pointer shrink-0`}
-                      >
-                        <X size={isMobile ? 14 : 12} />
-                      </button>
-                    </div>
-                  )}
-                  {chatAttachment && (
-                    <div className="relative w-20 h-20 rounded-lg overflow-hidden border border-[var(--border)]">
-                      <img src={chatAttachment.preview} alt={t("components.attachReference")} className="w-full h-full object-cover" />
-                      <button
-                        onClick={() => setChatAttachment(null)}
-                        className={`absolute top-1 right-1 ${isMobile ? "p-1.5" : "p-0.5"} rounded-full cd-media-icon-btn transition-colors cursor-pointer`}
-                      >
-                        <X size={isMobile ? 14 : 12} />
-                      </button>
-                    </div>
-                  )}
-                  <div className="flex gap-2 min-w-0">
-                    <button
-                      type="button"
-                      onClick={() => chatImageRef.current?.click()}
-                      disabled={isGenerating}
-                      className="shrink-0 px-3 py-3 rounded-xl bg-[var(--muted)] border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/50 transition-all cursor-pointer disabled:opacity-50"
-                      title={t("components.attachReference")}
-                    >
-                      <Paperclip size={16} />
-                    </button>
-                    <input ref={chatImageRef} type="file" accept="image/*" onChange={handleChatImageSelect} className="hidden" />
-                    <input
-                      type="text"
-                      value={editFeedback}
-                      onChange={(e) => setEditFeedback(e.target.value)}
-                      placeholder={t("page.describeChangesPlaceholder")}
-                      className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[var(--muted)] border border-[var(--border)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/50 focus:border-[var(--primary)] transition-all"
-                      onKeyDown={(e) => { if (e.key === "Enter" && editFeedback.trim()) handleEditSubmit(); }}
-                      disabled={isGenerating}
-                    />
-                    <button
-                      onClick={handleEditSubmit}
-                      disabled={
-                        !editFeedback.trim() ||
-                        isGenerating ||
-                        (tokenBalance !== null && tokenBalance < TOKEN_COSTS.edit)
-                      }
-                      className="shrink-0 px-4 sm:px-5 py-3 rounded-xl bg-[var(--primary)] text-white font-semibold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-50"
-                      title={t("tokens.editWithChat")}
-                    >
-                      <Send size={16} />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Version history */}
-                {designHistory.length > 0 && (
-                  <div className="w-full">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Clock size={14} className="text-[var(--muted-foreground)]" />
-                      <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                        {t("page.previousVersions", { count: designHistory.length })}
-                      </h4>
-                    </div>
-                    <div className={`grid ${isMobile ? "grid-cols-2" : "grid-cols-3"} gap-3`}>
-                      {designHistory.map((v) => (
-                        <div key={v.id} className="group relative">
-                          <div
-                            className="rounded-xl overflow-hidden border border-[var(--border)] cursor-pointer hover:border-[var(--primary)]/50 transition-all hover:shadow-md"
-                            onClick={() => setLightboxSrc(`data:${v.imageMimeType};base64,${v.imageBase64}`)}
-                          >
-                            <img
-                              src={`data:${v.imageMimeType};base64,${v.imageBase64}`}
-                              alt={v.brief?.subject || t("page.previousDesign")}
-                              className="w-full aspect-[4/3] object-cover"
-                            />
-                            <button
-                              onClick={(e) => { e.stopPropagation(); restoreDesignVersion(v.id); }}
-                              className={`absolute top-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[10px] font-medium hover:bg-black/90 cursor-pointer ${isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100 transition-opacity"}`}
-                              title={t("components.useVersionAsRef")}
-                            >
-                              {t("components.useAsRef")}
-                            </button>
-                          </div>
-                          <div className="mt-1.5 px-0.5">
-                            <p className="text-[11px] font-medium truncate">{v.brief?.subject || t("page.design")}</p>
-                            {v.feedback && (
-                              <p className="text-[10px] text-[var(--muted-foreground)] truncate">{t("page.editQuote", { feedback: v.feedback })}</p>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {showFinalResult && designMode === "made" && (
+            {showFinalResultInline && designMode === "made" && (
               <div className="w-full rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
                 <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
                   <ShoppingBag size={16} className="text-[var(--primary)]" />
@@ -4357,38 +4195,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               </div>
             )}
 
-            {showFinalResult && designMode === "custom" && (
-              <div className="w-full rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-                <h3 className="text-sm font-bold mb-2 flex items-center gap-2">
-                  <Sparkles size={16} className="text-[var(--primary)]" />
-                  {t("page.customResultTitle")}
-                </h3>
-                <p className="text-sm text-[var(--muted-foreground)] mb-4">
-                  {t("page.customResultBlurb")}
-                </p>
-                <button
-                  type="button"
-                  onClick={handleCustomInquiry}
-                  className="w-full py-3 rounded-xl bg-[var(--primary)] text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer"
-                >
-                  <Send size={18} />
-                  {t("page.customResultCta")}
-                </button>
-
-                {/* Save Design button */}
-                <button
-                  type="button"
-                  onClick={handleOpenSaveDesign}
-                  disabled={saveDesignDone}
-                  className="mt-3 w-full py-3 rounded-xl border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] font-bold flex items-center justify-center gap-2 hover:brightness-105 transition-all cursor-pointer disabled:opacity-60"
-                >
-                  {saveDesignDone ? <Check size={18} /> : <Save size={18} />}
-                  {saveDesignDone ? t("page.designSaved") : t("page.saveDesign")}
-                </button>
-              </div>
-            )}
-
-            {isGenerating && !showFinalResult && !phasedDesignActive && (
+            {isGenerating && !showFinalResultInline && !phasedDesignActive && designMode !== "custom" && (
               <div className="w-full aspect-[16/10] cd-skeleton rounded-2xl" />
             )}
           </div>
@@ -4502,6 +4309,13 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       )}
 
       <SupportContactModal open={supportModalOpen} onClose={() => setSupportModalOpen(false)} />
+      {currentProjectDbId && (
+        <ShareProjectModal
+          projectId={currentProjectDbId}
+          open={shareModalOpen}
+          onClose={() => setShareModalOpen(false)}
+        />
+      )}
       <LowBalancePrompt />
 
       <AllProductsModal
@@ -4585,6 +4399,19 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           </div>
         </div>
       )}
+
+
+      <QuickRoomResultOverlay
+        open={showCustomResultOverlay}
+        onBack={() => setQuickRoomView("compose")}
+        backDisabled={customResultLoading}
+        isLoading={customResultLoading}
+        loaderPhase={quickRoomLoaderPhase}
+        error={error}
+        onRetry={() => void handleGenerateClick()}
+      >
+        {quickRoomResultPanel}
+      </QuickRoomResultOverlay>
 
       {/* Lightbox modal */}
       {lightboxSrc && (

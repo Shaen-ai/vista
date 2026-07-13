@@ -86,9 +86,12 @@ export function ModeProjectHub({ mode, createPath, hubPath }: ModeProjectHubProp
   }
 
   const handleNewDesign = useCallback(() => {
-    useConsumerDesignStore.getState().setCurrentProjectDbId(null);
-    if (mode === "project") {
-      useConsumerDesignStore.getState().resetProject();
+    const store = useConsumerDesignStore.getState();
+    if (mode === "quick_room") {
+      store.resetQuickRoom();
+    } else {
+      store.setCurrentProjectDbId(null);
+      store.resetProject();
     }
     router.push(createPath);
   }, [mode, createPath, router]);

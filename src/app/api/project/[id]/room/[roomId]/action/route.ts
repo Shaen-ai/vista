@@ -14,6 +14,7 @@ import {
 } from "@/lib/project/projectOrchestrator";
 import { resolveProjectTokenAction } from "@/lib/project/projectTokenAction";
 import { checkTokensServer, consumeTokensServer } from "@/lib/serverVistaTokens";
+import { withRequestUploadUser } from "@/lib/uploadUserContext";
 
 export const maxDuration = 120;
 
@@ -21,6 +22,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; roomId: string }> },
 ) {
+  return withRequestUploadUser(request, async () => {
   const { id, roomId } = await params;
 
   const project = await getProject(id);
@@ -126,4 +128,5 @@ export async function POST(
     const msg = error instanceof Error ? error.message : "Room action failed";
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+  });
 }

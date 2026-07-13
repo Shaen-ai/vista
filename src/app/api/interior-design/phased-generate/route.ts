@@ -30,6 +30,7 @@ import {
   type InspirationItem,
 } from "@/lib/phasedRoomEngine";
 import { runWithLogContext } from "@/lib/logSink";
+import { withRequestUploadUser } from "@/lib/uploadUserContext";
 import { buildSpendResponse, isDevSpendEnabled } from "@/lib/aiSpend";
 
 export const maxDuration = 180;
@@ -256,7 +257,9 @@ async function handleFinalView(formData: FormData, request: NextRequest, timer: 
 
 export async function POST(request: NextRequest) {
   const logId = `phased-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  return runWithLogContext(logId, () => handlePhasedPost(request));
+  return runWithLogContext(logId, () =>
+    withRequestUploadUser(request, () => handlePhasedPost(request)),
+  );
 }
 
 async function handlePhasedPost(request: NextRequest) {

@@ -3,6 +3,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 
 const UPLOAD_TTL_MS = 48 * 60 * 60 * 1000;
+const ANONYMOUS_USER_ID = "anonymous";
 
 export function getUploadsDir(): string {
   return (
@@ -39,9 +40,22 @@ function sanitizeSegment(segment: string): string {
 }
 
 export type SaveUploadOpts = {
+  /** @deprecated Use projectId */
   sessionId?: string;
+  projectId?: string;
+  userId?: string;
   type?: "original" | "generated" | "edited";
 };
+
+function resolveProjectId(opts?: SaveUploadOpts): string {
+  return sanitizeSegment(
+    opts?.projectId?.trim() || opts?.sessionId?.trim() || "misc",
+  );
+}
+
+function resolveUserId(opts?: SaveUploadOpts): string {
+  return sanitizeSegment(opts?.userId?.trim() || ANONYMOUS_USER_ID);
+}
 
 /** Writes buffer to disk; returns a relative path safe for `/api/uploads/<path>`. */
 export async function saveUploadToDisk(
@@ -49,10 +63,11 @@ export async function saveUploadToDisk(
   mime: string,
   opts?: SaveUploadOpts,
 ): Promise<string> {
-  const dirSegment = sanitizeSegment(opts?.sessionId?.trim() || "misc");
+  const userSegment = resolveUserId(opts);
+  const projectSegment = resolveProjectId(opts);
   const fileName = `${randomUUID()}.${extensionForMime(mime)}`;
-  const relativePath = path.posix.join(dirSegment, fileName);
-  const absolutePath = path.join(getUploadsDir(), dirSegment, fileName);
+  const relativePath = path.posix.join(userSegment, projectSegment, fileName);
+  const absolutePath = path.join(getUploadsDir(), userSegment, projectSegment, fileName);
 
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   await fs.writeFile(absolutePath, buffer);
@@ -84,35 +99,67 @@ export function resolveUploadFilePath(relativePath: string): string | null {
   return absolute;
 }
 
-async function cleanupOldUploads(): Promise<void> {
-  const root = getUploadsDir();
-  const cutoff = Date.now() - UPLOAD_TTL_MS;
+async function cleanupEphemeralFilesInDir(dirPath: string, cutoff: number): Promise<void> {
   let entries: string[];
   try {
-    entries = await fs.readdir(root);
+    entries = await fs.readdir(dirPath);
   } catch {
     return;
   }
 
   await Promise.all(
     entries.map(async (entry) => {
-      const entryPath = path.join(root, entry);
+      const entryPath = path.join(dirPath, entry);
       try {
         const stat = await fs.stat(entryPath);
-        if (stat.isDirectory()) {
-          const files = await fs.readdir(entryPath);
-          await Promise.all(
-            files.map(async (file) => {
-              const filePath = path.join(entryPath, file);
-              const fileStat = await fs.stat(filePath);
-              if (fileStat.isFile() && fileStat.mtimeMs < cutoff) {
-                await fs.unlink(filePath).catch(() => {});
-              }
-            }),
-          );
-        } else if (stat.isFile() && stat.mtimeMs < cutoff) {
+        if (stat.isFile() && stat.mtimeMs < cutoff) {
           await fs.unlink(entryPath).catch(() => {});
         }
+      } catch {
+        /* ignore */
+      }
+    }),
+  );
+}
+
+async function cleanupOldUploads(): Promise<void> {
+  const root = getUploadsDir();
+  const cutoff = Date.now() - UPLOAD_TTL_MS;
+  let userEntries: string[];
+  try {
+    userEntries = await fs.readdir(root);
+  } catch {
+    return;
+  }
+
+  await Promise.all(
+    userEntries.map(async (userEntry) => {
+      const userPath = path.join(root, userEntry);
+      try {
+        const userStat = await fs.stat(userPath);
+        if (!userStat.isDirectory()) {
+          if (userStat.isFile() && userStat.mtimeMs < cutoff) {
+            await fs.unlink(userPath).catch(() => {});
+          }
+          return;
+        }
+
+        const projectEntries = await fs.readdir(userPath);
+        await Promise.all(
+          projectEntries.map(async (projectEntry) => {
+            const projectPath = path.join(userPath, projectEntry);
+            try {
+              const projectStat = await fs.stat(projectPath);
+              if (projectStat.isDirectory()) {
+                await cleanupEphemeralFilesInDir(projectPath, cutoff);
+              } else if (projectStat.isFile() && projectStat.mtimeMs < cutoff) {
+                await fs.unlink(projectPath).catch(() => {});
+              }
+            } catch {
+              /* ignore */
+            }
+          }),
+        );
       } catch {
         /* ignore */
       }

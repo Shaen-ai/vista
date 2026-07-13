@@ -24,7 +24,8 @@ import { dispatchSpendUpdate, extractSpendPayload } from "@/lib/devSpendClient";
 export async function analyzeAndRedesign(options: {
   onPhase?: (message: string) => void;
   onDebug?: (trace: GenerationClientTrace) => void;
-  roomImageBlob: Blob;
+  /** When omitted, room-geometry is skipped (text-to-room / no-photo path). */
+  roomImageBlob?: Blob | null;
   buildGenerateFormData: () => FormData | Promise<FormData>;
   skipGeometry?: boolean;
   preloadedGeometry?: { geometry: RoomGeometry | null; failed: boolean };
@@ -61,7 +62,9 @@ export async function analyzeAndRedesign(options: {
   let geometry: RoomGeometry | null = null;
   let geometryExtractionFailed = false;
 
-  if (skipGeometry && preloadedGeometry) {
+  if (!roomImageBlob) {
+    onPhase?.("Preparing design brief…");
+  } else if (skipGeometry && preloadedGeometry) {
     geometry = preloadedGeometry.geometry;
     geometryExtractionFailed = preloadedGeometry.failed;
     onPhase?.("Designing your new interior…");

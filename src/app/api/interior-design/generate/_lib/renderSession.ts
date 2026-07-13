@@ -20,6 +20,11 @@ export interface InteriorRenderSession {
    * sessions minted before this field existed.
    */
   renderEngine?: QuickRenderModel;
+  /** `gallery-edit` = in-place nano-banana on approved render; default initial furnish. */
+  renderMode?: "initial" | "gallery-edit";
+  /** Raw user chat edit text for gallery-edit mode. */
+  editFeedback?: string;
+  hasEditAnnotation?: boolean;
 }
 
 export function parseRenderSession(raw: FormDataEntryValue | null): InteriorRenderSession | null {
