@@ -133,6 +133,7 @@ export function ShareProjectModal({ projectId, open, onClose }: ShareProjectModa
               layout="inline"
               t={t}
               onCopyThenOpen={handleCopyThenOpen}
+              platforms={["facebook", "whatsapp", "instagram"]}
             />
             {pasteTip && (
               <p className="px-5 pb-1 text-xs text-[var(--muted-foreground)] sm:px-6">{t("referral.pasteInChat")}</p>

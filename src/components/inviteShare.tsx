@@ -107,10 +107,20 @@ type InviteShareButtonsProps = {
   layout: "inline" | "sheet";
   t: (key: string) => string;
   onCopyThenOpen: () => void;
+  platforms?: InviteSharePlatform[];
 };
 
-export function InviteShareButtons({ url, message, layout, t, onCopyThenOpen }: InviteShareButtonsProps) {
-  const targets = buildInviteShareTargets(url, message);
+export function InviteShareButtons({
+  url,
+  message,
+  layout,
+  t,
+  onCopyThenOpen,
+  platforms,
+}: InviteShareButtonsProps) {
+  const targets = buildInviteShareTargets(url, message).filter(
+    (target) => !platforms || platforms.includes(target.id),
+  );
 
   async function handleCopyThenOpen(target: Extract<InviteShareTarget, { kind: "copyThenOpen" }>) {
     try {

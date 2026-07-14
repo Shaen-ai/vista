@@ -96,8 +96,6 @@ export function QuickRoomGenerationLoader({ phase }: { phase: QuickRoomLoaderPha
         <div className="cd-gen-loader-room-wall cd-gen-loader-room-wall--left" />
         <div className="cd-gen-loader-room-wall cd-gen-loader-room-wall--right" />
         <div className="cd-gen-loader-room-window" />
-        <div className="cd-gen-loader-light-sweep" />
-        <div className="cd-gen-loader-shimmer" />
         <div className="cd-gen-loader-furniture">
           <div className="cd-gen-loader-sofa" />
           <div className="cd-gen-loader-table" />

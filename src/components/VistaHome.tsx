@@ -107,6 +107,7 @@ import {
   throwIfAiServiceUnavailable,
 } from "@/lib/aiServiceError";
 import { SupportContactModal } from "@/components/SupportContactModal";
+import { PriceQuoteModal } from "@/components/PriceQuoteModal";
 import { ShareProjectModal } from "@/components/ShareProjectModal";
 import { LowBalancePrompt } from "@/components/LowBalancePrompt";
 import { useVistaUiTheme } from "@/app/VistaThemeProvider";
@@ -1252,6 +1253,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const [saveDesignSaving, setSaveDesignSaving] = useState(false);
   const [saveDesignDone, setSaveDesignDone] = useState(false);
   const [supportModalOpen, setSupportModalOpen] = useState(false);
+  const [priceQuoteModalOpen, setPriceQuoteModalOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const {
     loadProjects,
@@ -2790,18 +2792,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       return;
     }
 
-    const message = t("page.customResultInquiryMessage");
-    const phone = (process.env.NEXT_PUBLIC_CONTACT_WHATSAPP || "").replace(/[^\d]/g, "");
-    const email = process.env.NEXT_PUBLIC_CONTACT_EMAIL || "";
-    const url = phone
-      ? `https://wa.me/${phone}?text=${encodeURIComponent(message)}`
-      : email
-        ? `mailto:${email}?subject=${encodeURIComponent(t("page.customResultCta"))}&body=${encodeURIComponent(message)}`
-        : "";
-    if (url) {
-      window.open(url, "_blank", "noopener,noreferrer");
-    }
-  }, [router, t]);
+    setPriceQuoteModalOpen(true);
+  }, [router]);
 
   const handleSaveDesign = useCallback(async () => {
     const title = saveDesignName.trim() || generateAutoDesignName();
@@ -4309,6 +4301,13 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       )}
 
       <SupportContactModal open={supportModalOpen} onClose={() => setSupportModalOpen(false)} />
+      <PriceQuoteModal
+        open={priceQuoteModalOpen}
+        onClose={() => setPriceQuoteModalOpen(false)}
+        roomType={designBrief?.roomType || selectedQuickRoomType}
+        style={selectedStyle}
+        projectId={currentProjectDbId}
+      />
       {currentProjectDbId && (
         <ShareProjectModal
           projectId={currentProjectDbId}

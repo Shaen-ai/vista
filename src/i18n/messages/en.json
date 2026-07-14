@@ -294,7 +294,7 @@
     "designModeMadeHint": "Furnished with real products you can buy now.",
     "designModeCustomHint": "A one-of-a-kind concept designed for your space.",
     "customResultTitle": "Your custom concept",
-    "customResultBlurb": "Want pricing for this room design and the products shown? Contact us and we'll send you a quote.",
+    "customResultBlurb": "Want pricing for this room design? Request a quote and we'll email it to you.",
     "customResultCta": "Get price for this room",
     "customResultSignInCta": "Sign in to get price",
     "customResultLoginNote": "Sign in to contact us about pricing for this design.",
@@ -942,6 +942,18 @@
       "stillHaveDesc": "Our team is happy to help. Reach out and we'll get back to you within 24 hours.",
       "contactUs": "Contact Us"
     }
+  },
+  "priceQuote": {
+    "title": "Get a price quote",
+    "description": "We'll send your price quote to {email}. Add a preferred contact number below if you'd like us to reach you another way.",
+    "phoneLabel": "Preferred contact number (optional)",
+    "phonePlaceholder": "e.g. +374 00 000000",
+    "submit": "Send request",
+    "submitting": "Sending…",
+    "successTitle": "Request sent",
+    "successBody": "Thanks! We've received your request and will email your price quote to {email} soon.",
+    "error": "We couldn't send your request. Please try again in a moment.",
+    "loading": "Loading your account…"
   },
   "supportModal": {
     "title": "We need a moment to fix this",

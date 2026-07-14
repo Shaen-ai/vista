@@ -223,8 +223,15 @@ export async function runQuickRoomRenderPhase(opts: {
     }
 
     const roomBytes = await roomImage.arrayBuffer();
-    const optimized = await optimizeImageBufferForAi(Buffer.from(roomBytes));
-    timer.mark("gallery_edit_image", { bytes: optimized.byteLength });
+    const approvedRenderBuffer = Buffer.from(roomBytes);
+    const approvedRenderMime =
+      (typeof roomImage.type === "string" && roomImage.type.trim()) || "image/jpeg";
+    const approvedRenderBase64 = approvedRenderBuffer.toString("base64");
+    timer.mark("gallery_edit_image", {
+      bytes: approvedRenderBuffer.byteLength,
+      mime: approvedRenderMime,
+      recompressed: false,
+    });
 
     let annotationBase64: string | undefined;
     let annotationMime: string | undefined;
@@ -252,8 +259,8 @@ export async function runQuickRoomRenderPhase(opts: {
 
     const galleryResult = await runQuickRoomGalleryEditPipeline({
       sessionId: gallerySessionId,
-      approvedRenderBase64: optimized.base64,
-      approvedRenderMime: optimized.mimeType,
+      approvedRenderBase64,
+      approvedRenderMime,
       editFeedback: editFeedbackText,
       hasEditAnnotation: renderSession.hasEditAnnotation,
       annotationBase64,

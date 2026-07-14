@@ -188,21 +188,21 @@ export function SharePageClient({ initialData = null }: SharePageClientProps) {
 
             {(data.room_image_url || latestVersion) && (
               <section>
-                <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
+                <div className="grid justify-items-center gap-4 sm:grid-cols-2 sm:justify-items-stretch sm:gap-6">
                   {data.room_image_url && (
-                    <div>
+                    <div className="w-full max-w-[240px] sm:max-w-none">
                       <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
                         {t("sharePage.before")}
                       </p>
                       <button
                         type="button"
                         onClick={() => setLightboxSrc(data.room_image_url)}
-                        className="block w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-md transition-shadow hover:shadow-lg"
+                        className="mx-auto block w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-md transition-shadow hover:shadow-lg sm:mx-0"
                       >
                         <img
                           src={data.room_image_url}
                           alt={t("sharePage.before")}
-                          className="aspect-[4/3] w-full object-cover"
+                          className="aspect-[4/3] max-h-[200px] w-full object-cover sm:max-h-none"
                           onError={(e) => {
                             (e.target as HTMLImageElement).style.display = "none";
                           }}
@@ -211,19 +211,19 @@ export function SharePageClient({ initialData = null }: SharePageClientProps) {
                     </div>
                   )}
                   {latestVersion && (
-                    <div>
+                    <div className="w-full max-w-[240px] sm:max-w-none">
                       <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
                         {t("sharePage.after")}
                       </p>
                       <button
                         type="button"
                         onClick={() => setLightboxSrc(latestVersion.image_url)}
-                        className="block w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-md transition-shadow hover:shadow-lg"
+                        className="mx-auto block w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-md transition-shadow hover:shadow-lg sm:mx-0"
                       >
                         <img
                           src={latestVersion.image_url}
                           alt={t("sharePage.after")}
-                          className="aspect-[4/3] w-full object-cover"
+                          className="aspect-[4/3] max-h-[200px] w-full object-cover sm:max-h-none"
                           onError={(e) => {
                             (e.target as HTMLImageElement).style.display = "none";
                           }}
@@ -246,8 +246,7 @@ export function SharePageClient({ initialData = null }: SharePageClientProps) {
                       key={v.id}
                       type="button"
                       onClick={() => setLightboxSrc(v.image_url)}
-                      className="group relative shrink-0 snap-start overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm transition-shadow hover:shadow-md"
-                      style={{ width: "min(220px, 70vw)" }}
+                      className="group relative w-[min(140px,44vw)] shrink-0 snap-start overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm transition-shadow hover:shadow-md sm:w-[220px]"
                     >
                       <img
                         src={v.image_url}
