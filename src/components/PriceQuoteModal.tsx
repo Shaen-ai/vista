@@ -4,8 +4,14 @@ import { useEffect, useState } from "react";
 import { Check, Loader2, Send, X } from "lucide-react";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
 import { fetchCurrentUser, type AuthUser } from "@/lib/authApi";
-import { getPublicApiUrl } from "@/lib/publicEnv";
 import { track } from "@/lib/analytics";
+import { buildQuoteMessage } from "@/lib/priceQuoteMessage";
+import { getPublicApiUrl } from "@/lib/publicEnv";
+
+export type PriceQuoteProjectContext = {
+  projectId: string | null;
+  shareUrl: string | null;
+};
 
 type PriceQuoteModalProps = {
   open: boolean;
@@ -13,22 +19,10 @@ type PriceQuoteModalProps = {
   roomType?: string;
   style?: string;
   projectId?: string | null;
+  resolveProjectContext?: () => Promise<PriceQuoteProjectContext>;
 };
 
 type ModalPhase = "form" | "submitting" | "success" | "error";
-
-function buildQuoteMessage(input: {
-  inquiry: string;
-  roomType?: string;
-  style?: string;
-  projectId?: string | null;
-}): string {
-  const lines = [input.inquiry.trim()];
-  if (input.roomType?.trim()) lines.push(`Room type: ${input.roomType.trim()}`);
-  if (input.style?.trim()) lines.push(`Style: ${input.style.trim()}`);
-  if (input.projectId?.trim()) lines.push(`Project ID: ${input.projectId.trim()}`);
-  return lines.join("\n");
-}
 
 export function PriceQuoteModal({
   open,
@@ -36,6 +30,7 @@ export function PriceQuoteModal({
   roomType,
   style,
   projectId,
+  resolveProjectContext,
 }: PriceQuoteModalProps) {
   const { t } = useTranslation();
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -72,11 +67,25 @@ export function PriceQuoteModal({
     if (!user?.email || !user.name) return;
 
     setPhase("submitting");
+
+    let resolvedProjectId = projectId ?? null;
+    let shareUrl: string | null = null;
+    if (resolveProjectContext) {
+      try {
+        const context = await resolveProjectContext();
+        resolvedProjectId = context.projectId ?? resolvedProjectId;
+        shareUrl = context.shareUrl;
+      } catch {
+        /* submit quote without share URL */
+      }
+    }
+
     const message = buildQuoteMessage({
       inquiry: t("page.customResultInquiryMessage"),
       roomType,
       style,
-      projectId,
+      projectId: resolvedProjectId,
+      shareUrl,
     });
     const phoneTrimmed = phone.trim();
 
@@ -92,17 +101,18 @@ export function PriceQuoteModal({
           email: user.email,
           message,
           ...(phoneTrimmed ? { phone: phoneTrimmed } : {}),
+          ...(shareUrl ? { share_url: shareUrl } : {}),
           source: "vista_price_quote",
         }),
       });
-      const payload = (await res.json().catch(() => ({}))) as { message?: string };
       if (!res.ok) {
         setPhase("error");
         return;
       }
       track("price_quote_requested", {
         has_phone: !!phoneTrimmed,
-        project_id: projectId ?? undefined,
+        project_id: resolvedProjectId ?? undefined,
+        has_share_url: !!shareUrl,
       });
       setPhase("success");
     } catch {

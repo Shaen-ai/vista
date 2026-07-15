@@ -1260,6 +1260,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const {
     loadProjects,
     renameProject,
+    getShareStatus,
+    enableShare,
     isAuthenticated: isPersistenceAuthenticated,
   } = useProjectPersistence();
   const { ensureProject, persistGeneratedVersion } = useQuickRoomAutosave({
@@ -2846,6 +2848,28 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setPriceQuoteModalOpen(true);
   }, [router]);
 
+  const resolveProjectContext = useCallback(async () => {
+    const projectId = (await ensureProject()) ?? currentProjectDbId;
+    if (!projectId) {
+      return { projectId: null, shareUrl: null };
+    }
+
+    try {
+      const status = await getShareStatus(projectId);
+      if (status?.enabled && status.share_url) {
+        return { projectId, shareUrl: status.share_url };
+      }
+
+      const enabled = await enableShare(projectId);
+      return {
+        projectId,
+        shareUrl: enabled?.share_url ?? null,
+      };
+    } catch {
+      return { projectId, shareUrl: null };
+    }
+  }, [currentProjectDbId, enableShare, ensureProject, getShareStatus]);
+
   const handleSaveDesign = useCallback(async () => {
     const title = saveDesignName.trim() || generateAutoDesignName();
     setSaveDesignSaving(true);
@@ -4358,6 +4382,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         roomType={designBrief?.roomType || selectedQuickRoomType}
         style={selectedStyle}
         projectId={currentProjectDbId}
+        resolveProjectContext={resolveProjectContext}
       />
       {currentProjectDbId && (
         <ShareProjectModal
