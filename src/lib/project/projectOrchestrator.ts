@@ -162,7 +162,10 @@ import {
   type EditAttemptRecord,
 } from "./editRetryPolicy";
 import { analyzePhotoOpenings } from "./photoOpeningAnalysis";
-import { describeHeroFurniturePlacement } from "./heroPlacementMap";
+import {
+  describeHeroFurniturePlacement,
+  isHeroPlacementMapEnabled,
+} from "./heroPlacementMap";
 import { logPipelineStage, logRoomPipelineSummary } from "./pipelineStageLog";
 import {
   writeWorkspaceFile,
@@ -739,6 +742,10 @@ export async function initializeSpatialAnalysis(
     });
     const seeded =
       (input.manualAnalysis?.rooms?.filter((r) => (r.polygon?.length ?? 0) >= 3).length ?? 0) > 0;
+    // Show motion before the long, silent vision call so the client isn't stuck at 10%.
+    if (!seeded) {
+      onProgress?.({ phase: "floor_plan", message: "Reading room shapes…", progress: 0.4 });
+    }
     const analysis = await analyzeFloorPlan(
       input.floorPlanBase64,
       input.floorPlanMimeType,
@@ -1148,6 +1155,8 @@ export async function confirmFloorPlan(
   state.utilityEntryPoints = input.utilityEntryPoints ?? [];
   state.floorPlanConfirmed = true;
   await setProject(state);
+
+  prefetchPhotoOpeningAnalyses(state, projectId);
 
   return state;
 }
@@ -2311,6 +2320,39 @@ async function ensurePhotoOpeningAnalysis(opts: {
   }
 }
 
+/** Fire-and-forget opening analysis for all uploaded photos (warms cache before generation). */
+function prefetchPhotoOpeningAnalyses(state: ProjectState, projectId: string): void {
+  const photos = state.uploadedPhotos.filter((p) => p.base64?.trim() && !p.openingAnalysis);
+  if (photos.length === 0) return;
+
+  void (async () => {
+    await Promise.allSettled(
+      photos.map(async (photo) => {
+        const result = await analyzePhotoOpenings({
+          photoBase64: photo.base64,
+          photoMime: photo.mimeType,
+          photoId: photo.id,
+          projectId,
+          roomId: photo.roomId,
+        });
+        if (!result) return;
+        const fresh = await getProject(projectId);
+        if (!fresh) return;
+        const uploaded = fresh.uploadedPhotos.find((p) => p.id === photo.id);
+        if (!uploaded || uploaded.openingAnalysis) return;
+        uploaded.openingAnalysis = result;
+        await setProject(fresh);
+        pipelineLog("ROOM_OPENINGS", "prefetched photo opening analysis", {
+          projectId,
+          photoId: photo.id,
+          windows: result.window_boxes.length,
+          doors: result.door_boxes.length,
+        });
+      }),
+    );
+  })();
+}
+
 async function generateRoomViaEditPipeline(opts: {
   state: ProjectState;
   projectId: string;
@@ -2466,6 +2508,14 @@ async function generateRoomViaEditPipeline(opts: {
     }
   };
 
+  let renderUpsertChain: Promise<void> = Promise.resolve();
+  const upsertRenderAsync = async (photoId: string, renderEntry: RenderResult) => {
+    renderUpsertChain = renderUpsertChain.then(() => {
+      upsertRender(photoId, renderEntry);
+    });
+    await renderUpsertChain;
+  };
+
   type EditGenerationStep = NonNullable<typeof room.generationStep>;
 
   const emitEditProgress = async (
@@ -2505,9 +2555,16 @@ async function generateRoomViaEditPipeline(opts: {
       /** Rebuilds the secondary prompt for a hero-free call (no "SECOND image" references). */
       rebuildPromptWithoutHero?: () => string;
       onBeforeValidate?: () => Promise<void>;
+      /** Retry only failed validation sub-checks from the prior attempt. */
+      validationOnlyChecks?: import("./renderValidation").ValidationCheck[];
     },
     attemptRecords: EditAttemptRecord[] = [],
-  ): Promise<{ base64: string; mimeType: string; validationPassed: boolean } | null> => {
+  ): Promise<{
+    base64: string;
+    mimeType: string;
+    validationPassed: boolean;
+    heroAnalysis?: import("./heroPlacementMap").HeroMasterAnalysis;
+  } | null> => {
     const {
       photo,
       isMaster,
@@ -2619,6 +2676,7 @@ async function generateRoomViaEditPipeline(opts: {
           failureTypes: ["hero_copy"],
           correctiveFeedback:
             "CORRECTION: Your previous output reproduced the SECOND image (the master design) with its camera and composition. That is wrong. The output MUST keep the FIRST image's camera angle, walls, and openings exactly — the FIRST image is the photo to edit; the SECOND image is only a furniture/finish/palette reference.",
+          failedChecks: ["judge"],
         };
         attemptRecords.push({
           attempt,
@@ -2672,6 +2730,7 @@ async function generateRoomViaEditPipeline(opts: {
                 prompt: anchorPrompt,
                 attachHero: false,
                 attempt: attempt + 1,
+                validationOnlyChecks: heroCopyValidation.failedChecks,
               },
               attemptRecords,
             );
@@ -2681,6 +2740,7 @@ async function generateRoomViaEditPipeline(opts: {
               ...input,
               prompt: `${prompt} ${heroCopyCorrection}`,
               attempt: attempt + 1,
+              validationOnlyChecks: heroCopyValidation.failedChecks,
             },
             attemptRecords,
           );
@@ -2707,6 +2767,13 @@ async function generateRoomViaEditPipeline(opts: {
       photoId: photo.id,
       label: `${isMaster ? "master" : "secondary"}-attempt-${attempt}`,
       furnitureLabels: brief.furnitureList?.length ? brief.furnitureList : plan?.furnitureList,
+      onlyChecks: input.validationOnlyChecks,
+      extractHeroAnalysis: isMaster && isHeroPlacementMapEnabled(),
+      heroFraming:
+        isMaster && photo.viewpoint && detectedRoom
+          ? resolveViewpointFraming(photo.viewpoint, detectedRoom)
+          : null,
+      expectedFurnitureList: plan?.furnitureList,
     });
 
     attemptRecords.push({
@@ -2744,6 +2811,7 @@ async function generateRoomViaEditPipeline(opts: {
               prompt: anchorPrompt,
               attachHero: false,
               attempt: attempt + 1,
+              validationOnlyChecks: validation.failedChecks,
             },
             attemptRecords,
           );
@@ -2761,6 +2829,7 @@ async function generateRoomViaEditPipeline(opts: {
             ...input,
             prompt: retryPrompt,
             attempt: attempt + 1,
+            validationOnlyChecks: validation.failedChecks,
           },
           attemptRecords,
         );
@@ -2774,7 +2843,7 @@ async function generateRoomViaEditPipeline(opts: {
     if (room.lastValidationFeedback?.[photo.id]) {
       delete room.lastValidationFeedback[photo.id];
     }
-    return { ...rendered, validationPassed: true };
+    return { ...rendered, validationPassed: true, heroAnalysis: validation.heroAnalysis };
   };
 
   const buildHeroMasterAnalysis = async (base64: string, mime: string) => {
@@ -3037,7 +3106,9 @@ async function generateRoomViaEditPipeline(opts: {
         room.heroDecorLock = analysis.decorLock ?? undefined;
       }
     }
-    for (let i = 0; i < workQueue.length; i++) {
+    const SECONDARY_RENDER_PARALLEL = 2;
+
+    const processWorkQueueIndex = async (i: number): Promise<void> => {
       throwIfGenerationAborted(opts.abortSignal);
       const { photo, mode, globalIndex } = workQueue[i]!;
       const isMaster = mode === "master";
@@ -3236,18 +3307,22 @@ async function generateRoomViaEditPipeline(opts: {
         });
 
         if (!img) {
+          if (!room.viewpointErrors) room.viewpointErrors = {};
           room.viewpointErrors[photo.id] = "Edit pipeline returned no image";
-          continue;
+          return;
         }
 
         if (isMaster) {
           heroBase64 = img.base64;
           heroMime = img.mimeType;
-          // Refresh on every master render — a stale map from a previous
-          // master must never leak into the new batch's secondary views.
-          const analysis = await buildHeroMasterAnalysis(img.base64, img.mimeType);
-          room.heroPlacementMap = analysis.placementMap ?? undefined;
-          room.heroDecorLock = analysis.decorLock ?? undefined;
+          if (img.heroAnalysis?.placementMap || img.heroAnalysis?.decorLock) {
+            room.heroPlacementMap = img.heroAnalysis.placementMap ?? undefined;
+            room.heroDecorLock = img.heroAnalysis.decorLock ?? undefined;
+          } else {
+            const analysis = await buildHeroMasterAnalysis(img.base64, img.mimeType);
+            room.heroPlacementMap = analysis.placementMap ?? undefined;
+            room.heroDecorLock = analysis.decorLock ?? undefined;
+          }
         }
 
         const renderFile = isMaster ? "render-master.jpg" : `render-${photo.id}.jpg`;
@@ -3271,7 +3346,7 @@ async function generateRoomViaEditPipeline(opts: {
           ...(img.validationPassed === false ? { notConfirmed: true } : {}),
         };
 
-        upsertRender(photo.id, renderEntry);
+        await upsertRenderAsync(photo.id, renderEntry);
         const photoDoneStep: EditGenerationStep =
           i === workQueue.length - 1 ? "complete" : "staging";
         await emitEditProgress(
@@ -3285,6 +3360,7 @@ async function generateRoomViaEditPipeline(opts: {
         );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
+        if (!room.viewpointErrors) room.viewpointErrors = {};
         room.viewpointErrors[photo.id] = errMsg;
         room.generationError = errMsg;
         room.generationFailedAt = new Date().toISOString();
@@ -3297,8 +3373,30 @@ async function generateRoomViaEditPipeline(opts: {
         });
         await persistEditProgress(newRenders);
         if (i === 0 && newRenders.length === 0) {
-          return { ok: false, images: [], error: errMsg };
+          throw new Error(errMsg);
         }
+      }
+    };
+
+    const masterIndices = workQueue
+      .map((item, idx) => (item.mode === "master" ? idx : -1))
+      .filter((idx) => idx >= 0);
+    const secondaryIndices = workQueue
+      .map((item, idx) => (item.mode === "secondary" ? idx : -1))
+      .filter((idx) => idx >= 0);
+
+    try {
+      for (const idx of masterIndices) {
+        await processWorkQueueIndex(idx);
+      }
+      for (let b = 0; b < secondaryIndices.length; b += SECONDARY_RENDER_PARALLEL) {
+        const batch = secondaryIndices.slice(b, b + SECONDARY_RENDER_PARALLEL);
+        await Promise.all(batch.map((idx) => processWorkQueueIndex(idx)));
+      }
+    } catch (batchErr) {
+      const errMsg = batchErr instanceof Error ? batchErr.message : String(batchErr);
+      if (newRenders.length === 0) {
+        return { ok: false, images: [], error: errMsg };
       }
     }
 

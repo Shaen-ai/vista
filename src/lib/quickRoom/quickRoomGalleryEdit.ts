@@ -43,7 +43,7 @@ export async function runQuickRoomGalleryEditPipeline(
     imageRoles.push("1: user marked areas (red strokes) — edit only these regions");
   }
 
-  const editResolution = (process.env.VISTA_EDIT_RESOLUTION || "4K").trim().toUpperCase();
+  const editResolution = (process.env.VISTA_EDIT_RESOLUTION || "2K").trim().toUpperCase();
 
   logQuickRoomFalStep({
     step: "banana",

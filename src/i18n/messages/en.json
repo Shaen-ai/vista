@@ -84,7 +84,7 @@
     "editWithChat": "Edit with chat",
     "costTokens": "{cost} tokens",
     "costTokensAmd": "{cost} tokens ({amd} AMD)",
-    "insufficientBalance": "Not enough balance to continue.",
+    "insufficientBalance": "Not enough tokens. This action costs {cost} tokens; you have {balance}.",
     "generateCost": "— {cost} tokens",
     "editCostTitle": "Edit with chat — {cost} tokens"
   },
@@ -220,6 +220,7 @@
     "catalogHint": "Designs use scraped inventory only; products are matched automatically from your prompt.",
     "localCatalogEmpty": "Local mode requires products in our catalog. Add items from search or try a different prompt — generation cannot use off-catalog furniture.",
     "gatewayTimeout": "Generation took too long and timed out. Wait about two minutes, then try again. If it keeps happening, use a shorter prompt or pick a few catalog products first.",
+    "cloudflareSecurityCheck": "Security check required — please reload the page and try again.",
     "searchMarketplaces": "Search marketplaces",
     "searchMarketplacesHint": "Find furniture from local and global stores",
     "showAllProducts": "Show all products ({count})",

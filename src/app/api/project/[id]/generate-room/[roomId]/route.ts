@@ -95,7 +95,7 @@ export async function POST(
 
   const stream = new ReadableStream({
     async start(controller) {
-      const { emit: emitRaw, close } = createSseEmitter(controller);
+      const { emit: emitRaw, close } = createSseEmitter(controller, { heartbeatMs: 10_000 });
       let tokenConsumed = false;
       let billingChain: Promise<void> = Promise.resolve();
 

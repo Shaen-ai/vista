@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getAuthToken } from "@/lib/authApi";
 import { useConsumerDesignStore } from "@/app/store";
-import { fetchTokenBalance, grantAnonymousTokens } from "@/lib/vistaTokens";
+import { fetchTokenBalance, syncVistaTokenBalance } from "@/lib/vistaTokens";
 import { LowBalanceModal } from "@/components/LowBalanceModal";
 import {
   isBelowLowBalanceThreshold,
@@ -25,7 +25,7 @@ export function LowBalancePrompt() {
 
   useEffect(() => {
     if (tokenBalance !== null) return;
-    grantAnonymousTokens()
+    syncVistaTokenBalance()
       .then((data) => setTokenBalance(data.balance))
       .catch(() =>
         fetchTokenBalance()

@@ -5,6 +5,7 @@ import { openAiFetch } from "@/lib/openAiFetch";
 import { withRetry } from "@/lib/aiRetry";
 import { pipelineLog } from "@/lib/pipelineLog";
 import type { ViewpointFraming } from "@/lib/project/viewpointFraming";
+import { getValidateModel, optimizeBase64ForValidation } from "@/lib/validationImageHelpers";
 
 export function isHeroPlacementMapEnabled(): boolean {
   const raw = (process.env.VISTA_HERO_PLACEMENT_MAP ?? "").trim();
@@ -26,6 +27,15 @@ function compassLabel(wall: string | null | undefined, fallback: string): string
 export interface HeroMasterAnalysis {
   placementMap: string | null;
   decorLock: string | null;
+}
+
+export function formatHeroMasterAnalysis(
+  placements: string[],
+  decor: string[],
+): HeroMasterAnalysis {
+  const placementMap = placements.length > 0 ? formatPlacementMap(placements) : null;
+  const decorLock = decor.length > 0 ? formatDecorLock(decor) : null;
+  return { placementMap, decorLock };
 }
 
 function formatPlacementMap(placements: string[]): string {
@@ -91,9 +101,13 @@ export async function describeHeroFurniturePlacement(input: {
     'Respond JSON only: {"placements": string[], "decor": string[]}.';
 
   const apiUrl = process.env.OPENAI_API_URL || "https://api.openai.com/v1/chat/completions";
-  const model = process.env.FLOOR_PLAN_ANALYSIS_MODEL || "gpt-5.5";
+  const model = getValidateModel();
 
   try {
+    const heroImage = await optimizeBase64ForValidation(
+      input.heroBase64,
+      input.heroMime || "image/png",
+    );
     const response = await withRetry(async () => {
       const res = await openAiFetch(
         apiUrl,
@@ -113,7 +127,7 @@ export async function describeHeroFurniturePlacement(input: {
                   {
                     type: "image_url",
                     image_url: {
-                      url: `data:${input.heroMime || "image/png"};base64,${input.heroBase64}`,
+                      url: `data:${heroImage.mime};base64,${heroImage.base64}`,
                       detail: "high",
                     },
                   },
@@ -146,10 +160,8 @@ export async function describeHeroFurniturePlacement(input: {
       ? parsed.decor.filter((d): d is string => typeof d === "string" && !!d.trim())
       : [];
 
-    const placementMap = placements.length > 0 ? formatPlacementMap(placements) : null;
-    const decorLock = decor.length > 0 ? formatDecorLock(decor) : null;
-
-    if (!placementMap && !decorLock) {
+    const analysis = formatHeroMasterAnalysis(placements, decor);
+    if (!analysis.placementMap && !analysis.decorLock) {
       pipelineLog("FAL_PIPELINE", "hero placement map no placements or decor", { roomId: input.roomId }, "warn");
       return empty;
     }
@@ -164,7 +176,7 @@ export async function describeHeroFurniturePlacement(input: {
       decorPreview: decor.slice(0, 2).join(" | ").slice(0, 240),
     });
 
-    return { placementMap, decorLock };
+    return analysis;
   } catch (err) {
     pipelineLog(
       "FAL_PIPELINE",

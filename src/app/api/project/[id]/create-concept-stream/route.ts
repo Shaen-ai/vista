@@ -128,7 +128,7 @@ export async function POST(
 
   const stream = new ReadableStream({
     async start(controller) {
-      const { emit: send, close } = createSseEmitter(controller);
+      const { emit: send, close } = createSseEmitter(controller, { heartbeatMs: 10_000 });
 
       try {
         await createProjectConcept(

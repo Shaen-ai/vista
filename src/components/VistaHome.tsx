@@ -100,6 +100,8 @@ import {
   ROOM_TYPES,
 } from "@/lib/interiorDesignPrompts";
 import { formatApiErrorMessage } from "@/lib/apiError";
+import { TokenInsufficientError } from "@/lib/tokenErrors";
+import { CloudflareSecurityChallengeError } from "@/lib/cloudflareChallenge";
 import { sanitizeUserFacingMessage } from "@/lib/userFacingMessages";
 import { track } from "@/lib/analytics";
 import {
@@ -113,10 +115,10 @@ import { LowBalancePrompt } from "@/components/LowBalancePrompt";
 import { useVistaUiTheme } from "@/app/VistaThemeProvider";
 import { VistaHeaderActions } from "@/components/VistaHeaderActions";
 import {
-  TOKEN_COSTS,
   authContextForApi,
   fetchTokenBalance,
-  grantAnonymousTokens,
+  syncVistaTokenBalance,
+  TOKEN_COSTS,
   type TokenAction,
 } from "@/lib/vistaTokens";
 import { forceOpenLowBalancePrompt } from "@/lib/lowBalancePrompt";
@@ -1273,7 +1275,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
   const refreshTokenBalance = useCallback(async () => {
     try {
-      const data = await fetchTokenBalance();
+      const data = await syncVistaTokenBalance();
       setTokenBalance(data.balance);
     } catch {
       /* ignore */
@@ -1281,7 +1283,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   }, [setTokenBalance]);
 
   useEffect(() => {
-    grantAnonymousTokens()
+    syncVistaTokenBalance()
       .then((data) => setTokenBalance(data.balance))
       .catch(() => refreshTokenBalance());
   }, [setTokenBalance, refreshTokenBalance]);
@@ -1888,6 +1890,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         error?: string;
         code?: string;
         balance?: number;
+        required?: number;
         data?: {
           images?: Array<{ base64?: string; mimeType?: string }>;
           designBrief?: {
@@ -1935,6 +1938,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
       if (!res.ok || json.error) {
         void refreshTokenBalance();
+        if (typeof json.balance === "number") {
+          setTokenBalance(json.balance);
+        }
         throwIfAiServiceUnavailable(json);
         throw new Error(formatApiErrorMessage(json.error, t("page.generationFailed")));
       }
@@ -2018,6 +2024,15 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         error_message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
       });
       if (openSupportModalForAiError(err)) return;
+      if (err instanceof CloudflareSecurityChallengeError) {
+        setError(t("page.cloudflareSecurityCheck"));
+        return;
+      }
+      if (err instanceof TokenInsufficientError) {
+        setTokenBalance(err.balance);
+        setError(t("tokens.insufficientBalance", { cost: err.required, balance: err.balance }));
+        return;
+      }
       const raw = err instanceof Error ? err.message : "";
       setError(
         /timed out at the edge|gateway time-out|error 504/i.test(raw)
@@ -2200,6 +2215,15 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         error_message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
       });
       if (openSupportModalForAiError(err)) return;
+      if (err instanceof CloudflareSecurityChallengeError) {
+        setPhasedError(t("page.cloudflareSecurityCheck"));
+        return;
+      }
+      if (err instanceof TokenInsufficientError) {
+        setTokenBalance(err.balance);
+        setPhasedError(t("tokens.insufficientBalance", { cost: err.required, balance: err.balance }));
+        return;
+      }
       setPhasedError(err instanceof Error ? err.message : "Phase 1 generation failed.");
     } finally {
       setIsGenerating(false);
@@ -2453,6 +2477,15 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         error_message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
       });
       if (openSupportModalForAiError(err)) return;
+      if (err instanceof CloudflareSecurityChallengeError) {
+        setPhasedError(t("page.cloudflareSecurityCheck"));
+        return;
+      }
+      if (err instanceof TokenInsufficientError) {
+        setTokenBalance(err.balance);
+        setPhasedError(t("tokens.insufficientBalance", { cost: err.required, balance: err.balance }));
+        return;
+      }
       setPhasedError(err instanceof Error ? err.message : `Phase "${nextPhase}" generation failed.`);
     } finally {
       setIsGenerating(false);
@@ -2552,6 +2585,15 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       if (typeof result.balance === "number") setTokenBalance(result.balance);
     } catch (err) {
       if (openSupportModalForAiError(err)) return;
+      if (err instanceof CloudflareSecurityChallengeError) {
+        setPhasedError(t("page.cloudflareSecurityCheck"));
+        return;
+      }
+      if (err instanceof TokenInsufficientError) {
+        setTokenBalance(err.balance);
+        setPhasedError(t("tokens.insufficientBalance", { cost: err.required, balance: err.balance }));
+        return;
+      }
       setPhasedError(err instanceof Error ? err.message : "Redo failed.");
     } finally {
       setIsGenerating(false);
@@ -2669,6 +2711,15 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       if (typeof result.balance === "number") setTokenBalance(result.balance);
     } catch (err) {
       if (openSupportModalForAiError(err)) return;
+      if (err instanceof CloudflareSecurityChallengeError) {
+        setPhasedError(t("page.cloudflareSecurityCheck"));
+        return;
+      }
+      if (err instanceof TokenInsufficientError) {
+        setTokenBalance(err.balance);
+        setPhasedError(t("tokens.insufficientBalance", { cost: err.required, balance: err.balance }));
+        return;
+      }
       setPhasedError(err instanceof Error ? err.message : "Edit failed.");
     } finally {
       setIsGenerating(false);

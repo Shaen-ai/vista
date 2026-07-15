@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useConsumerDesignStore, type DesignBriefResult } from "@/app/store";
 import { useProjectPersistence } from "@/hooks/useProjectPersistence";
+import { CloudflareSecurityChallengeError } from "@/lib/cloudflareChallenge";
 import { compressDataUrl } from "@/lib/compressImageClient";
 import { styleInspirationsToPatchPayload } from "@/lib/inspirationPersistence";
 import {
@@ -93,6 +94,9 @@ export function useQuickRoomAutosave(options?: { enabled?: boolean }) {
         },
       });
       if (!created.ok) {
+        if (created.error.code === "cloudflare_challenge") {
+          throw new CloudflareSecurityChallengeError();
+        }
         console.warn("[vista:persist] create_failed", {
           status: created.error.status,
           message: created.error.message,

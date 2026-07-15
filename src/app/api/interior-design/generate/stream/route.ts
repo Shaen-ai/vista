@@ -61,7 +61,7 @@ async function handleQuickRoomStream(request: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      const { emit, close } = createSseEmitter(controller);
+      const { emit, close } = createSseEmitter(controller, { heartbeatMs: 10_000 });
 
       // First bytes immediately — keeps Cloudflare's idle timeout at bay while
       // the catalog refetch and image prep run.

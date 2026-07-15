@@ -45,6 +45,7 @@ export async function analyzePhotoOpenings(opts: {
   const optimized = await optimizeImageBufferForAiWithBuffer(bytes);
 
   const client = new Anthropic({ apiKey: anthropicKey });
+  const analysisPrompt = buildAnalysisSystemPrompt(false, "en");
   const content: Anthropic.ContentBlockParam[] = [
     {
       type: "image",
@@ -52,7 +53,8 @@ export async function analyzePhotoOpenings(opts: {
     },
     {
       type: "text",
-      text: buildAnalysisSystemPrompt(false, "en"),
+      text: analysisPrompt,
+      cache_control: { type: "ephemeral" },
     },
   ];
 

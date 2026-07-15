@@ -4,6 +4,7 @@ import { getOpenAiApiKey } from "@/lib/serverAiKeys";
 import { openAiFetch } from "@/lib/openAiFetch";
 import { withRetry } from "@/lib/aiRetry";
 import { pipelineLog } from "@/lib/pipelineLog";
+import { getValidateModel, optimizeBase64ForValidation } from "@/lib/validationImageHelpers";
 import {
   crossViewRetryScore,
   parseCrossViewValidationJson,
@@ -38,6 +39,10 @@ export async function validateCrossViewConsistency(opts: {
   }
 
   const list = opts.furnitureLabels.map((item, i) => `${i + 1}. ${item}`).join("\n");
+  const [heroImage, secondaryImage] = await Promise.all([
+    optimizeBase64ForValidation(opts.heroBase64, opts.heroMime),
+    optimizeBase64ForValidation(opts.secondaryBase64, opts.secondaryMime),
+  ]);
 
   const content = [
     {
@@ -58,21 +63,21 @@ export async function validateCrossViewConsistency(opts: {
     {
       type: "image_url",
       image_url: {
-        url: `data:${opts.heroMime};base64,${opts.heroBase64}`,
+        url: `data:${heroImage.mime};base64,${heroImage.base64}`,
         detail: "high",
       },
     },
     {
       type: "image_url",
       image_url: {
-        url: `data:${opts.secondaryMime};base64,${opts.secondaryBase64}`,
+        url: `data:${secondaryImage.mime};base64,${secondaryImage.base64}`,
         detail: "high",
       },
     },
   ];
 
   const apiUrl = process.env.OPENAI_API_URL || "https://api.openai.com/v1/chat/completions";
-  const model = process.env.FLOOR_PLAN_ANALYSIS_MODEL || "gpt-5.5";
+  const model = getValidateModel();
 
   try {
     const response = await withRetry(async () => {

@@ -10,6 +10,7 @@ import {
   VALIDATION_MAX_RETRIES,
   validationAbortSignal,
 } from "@/lib/validationAiHelpers";
+import { getValidateModel } from "@/lib/validationImageHelpers";
 
 /**
  * Structural validation gate (engine-agnostic): does the redesigned image keep the
@@ -96,7 +97,7 @@ export async function validateOpenings(opts: {
   ];
 
   const apiUrl = process.env.OPENAI_API_URL || "https://api.openai.com/v1/chat/completions";
-  const model = process.env.FLOOR_PLAN_ANALYSIS_MODEL || "gpt-5.5";
+  const model = getValidateModel();
 
   try {
     const response = await withRetry(async () => {

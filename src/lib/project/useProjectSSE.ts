@@ -9,21 +9,13 @@ import { sanitizeUserFacingMessage } from "@/lib/userFacingMessages";
 import { track } from "@/lib/analytics";
 import { authContextForApi } from "@/lib/vistaTokens";
 
+import { TokenInsufficientError } from "@/lib/tokenErrors";
+
 const DEFAULT_GENERATE_ROOM_SSE_TIMEOUT_MS = 360_000;
 
 let activeRoomGenerationAbort: AbortController | null = null;
 
-export class TokenInsufficientError extends Error {
-  readonly balance: number;
-  readonly required: number;
-
-  constructor(message: string, balance: number, required: number) {
-    super(message);
-    this.name = "TokenInsufficientError";
-    this.balance = balance;
-    this.required = required;
-  }
-}
+export { TokenInsufficientError };
 
 export function balanceFromProgressEvent(event: ProgressEvent | null | undefined): number | undefined {
   const data = event?.data;

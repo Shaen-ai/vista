@@ -39,7 +39,7 @@ import type {
 import { getRoomPhotos } from "./types";
 
 const CLAUDE_RENDER_MODEL =
-  process.env.ANTHROPIC_ROOM_GEOMETRY_MODEL?.trim() || "claude-opus-4-8";
+  process.env.ANTHROPIC_ROOM_GEOMETRY_MODEL?.trim() || "claude-sonnet-4-6";
 
 /**
  * 7 rooms × 300–400-word concepts + per-photo renderInstructions overflow an
@@ -187,6 +187,41 @@ const FULLY_FURNISHED_RULES = `FULLY-FURNISHED RULES — every room must read as
 - Choose any real-world furniture and decor appropriate to the style — do NOT restrict choices to any product catalog.
 - Density must still respect the SPACE-AWARE HARD RULES: keep walkways clear, never block door swings or windows, and scale down the complement in small rooms (< 8 m²) rather than omitting decor layers.`;
 
+const DIRECTOR_STATIC_RULES = `You are an interior design director preparing concepts for a virtual staging pipeline (fal-ai/nano-banana-pro/edit).
+
+You receive the uploaded floor plan, a whole-home schematic, room geometry logs, design preferences, style reference photos, room photos, and a photo/viewpoint matrix.
+
+The render model receives each room's real photo plus a FULL per-photo renderInstruction — never the floor plan image.
+
+For EVERY room, output:
+1. "designConcept": **300–400 words** — authoritative room design narrative (PDF + UI source of truth). Dense prose, no markdown headers, no SKUs. Cite room dimensions when choosing furniture scale. Enumerate the COMPLETE furniture list and all decor layers (rug, window treatments, lighting, wall art, plants, textiles, props). Describe furniture roles, materials, palette, mood, and symmetric professional lighting.
+2. "finishLock": shared finishes for ALL photos in this room — floorMaterial, ceilingDesign, wallColor, lightingConcept, optional paletteSummary (e.g. "light oak, sage accents").
+3. "photoPrompts": **one entry per photo** in the matrix for this roomId (match photoId exactly). Each entry MUST include:
+   - "renderInstruction": **full-length** instruction (300–1000 chars) with two sections:
+     PRESERVE: exact room geometry, walls, doors, windows, ceiling, camera angle — do not change openings.
+     CHANGE: finishes, furniture placement, decor, lighting — from finishLock + furnitureLayoutLock + camera-specific visible subset. Must include the decor layers visible from this camera (rug, curtains, lamps, wall art, plants, textiles), not only major furniture.
+   - "stagingPrompt": optional legacy short distill (~80–220 chars) for apartment-staging rollback.
+4. "furnitureLayoutLock": **required when 2+ photos** — 2-3 canonical sentences listing exactly one placement for EVERY furniture piece in the room (major pieces AND secondary pieces: bed, nightstands, wardrobe, desk, chairs, rug, lamps...). All photos are the SAME physical room; furniture positions must not move between views.
+5. "stagingPrompt": optional legacy hero distill (= photoPrompts[0].stagingPrompt).
+6. Structured metadata (style, colors, materials, furnitureList, mood) for technical plans and PDF.
+
+PER-PHOTO RENDER RULES:
+- Every photoPrompts[].renderInstruction MUST start with PRESERVE: (geometry + openings + camera) then CHANGE: (design).
+- Repeat furnitureLayoutLock verbatim in every photo renderInstruction before the camera-specific visible subset.
+- All photos are the SAME physical room — furniture positions must not move between views.
+- Never instruct changing walls, openings, or camera — the photo defines geometry.
+- Do NOT use phrases like "door wall" — when a door is visible, cameraNote must say "door opening visible" (not a solid wall).
+- When a door opening is visible, the CHANGE section must describe a finished closed door (leaf + frame + casing matching the palette) filling that opening — never an empty or gray recess.
+- furnitureLayoutLock must specify freestanding pieces only — never built-in or recessed wardrobes.
+
+${SPACE_AWARE_RULES}
+
+${HOUSEHOLD_ALLOCATION_RULES}
+
+${SURFACE_FINISH_RULES}
+
+${FULLY_FURNISHED_RULES}`;
+
 function buildStagingClaudePrompt(
   analysis: FloorPlanAnalysis,
   preferences: UserPreferences,
@@ -220,40 +255,7 @@ function buildStagingClaudePrompt(
 `
       : "") + roomWishesNote;
 
-  return `You are an interior design director preparing concepts for a virtual staging pipeline (fal-ai/nano-banana-pro/edit).
-
-You receive the uploaded floor plan, a whole-home schematic, room geometry logs, design preferences, style reference photos, room photos, and a photo/viewpoint matrix.
-
-The render model receives each room's real photo plus a FULL per-photo renderInstruction — never the floor plan image.
-
-For EVERY room, output:
-1. "designConcept": **300–400 words** — authoritative room design narrative (PDF + UI source of truth). Dense prose, no markdown headers, no SKUs. Cite room dimensions when choosing furniture scale. Enumerate the COMPLETE furniture list and all decor layers (rug, window treatments, lighting, wall art, plants, textiles, props). Describe furniture roles, materials, palette, mood, and symmetric professional lighting.
-2. "finishLock": shared finishes for ALL photos in this room — floorMaterial, ceilingDesign, wallColor, lightingConcept, optional paletteSummary (e.g. "light oak, sage accents").
-3. "photoPrompts": **one entry per photo** in the matrix for this roomId (match photoId exactly). Each entry MUST include:
-   - "renderInstruction": **full-length** instruction (300–1000 chars) with two sections:
-     PRESERVE: exact room geometry, walls, doors, windows, ceiling, camera angle — do not change openings.
-     CHANGE: finishes, furniture placement, decor, lighting — from finishLock + furnitureLayoutLock + camera-specific visible subset. Must include the decor layers visible from this camera (rug, curtains, lamps, wall art, plants, textiles), not only major furniture.
-   - "stagingPrompt": optional legacy short distill (~80–220 chars) for apartment-staging rollback.
-4. "furnitureLayoutLock": **required when 2+ photos** — 2-3 canonical sentences listing exactly one placement for EVERY furniture piece in the room (major pieces AND secondary pieces: bed, nightstands, wardrobe, desk, chairs, rug, lamps...). All photos are the SAME physical room; furniture positions must not move between views.
-5. "stagingPrompt": optional legacy hero distill (= photoPrompts[0].stagingPrompt).
-6. Structured metadata (style, colors, materials, furnitureList, mood) for technical plans and PDF.
-
-PER-PHOTO RENDER RULES:
-- Every photoPrompts[].renderInstruction MUST start with PRESERVE: (geometry + openings + camera) then CHANGE: (design).
-- Repeat furnitureLayoutLock verbatim in every photo renderInstruction before the camera-specific visible subset.
-- All photos are the SAME physical room — furniture positions must not move between views.
-- Never instruct changing walls, openings, or camera — the photo defines geometry.
-- Do NOT use phrases like "door wall" — when a door is visible, cameraNote must say "door opening visible" (not a solid wall).
-- When a door opening is visible, the CHANGE section must describe a finished closed door (leaf + frame + casing matching the palette) filling that opening — never an empty or gray recess.
-- furnitureLayoutLock must specify freestanding pieces only — never built-in or recessed wardrobes.
-
-${SPACE_AWARE_RULES}
-
-${HOUSEHOLD_ALLOCATION_RULES}
-
-${SURFACE_FINISH_RULES}
-
-${FULLY_FURNISHED_RULES}
+  return `${DIRECTOR_STATIC_RULES}
 
 HOME GEOMETRY LOG:
 ${planText}
@@ -537,21 +539,37 @@ async function requestRoomPlansOnce(opts: {
   );
 
   const content: Anthropic.ContentBlockParam[] = [];
+  const cacheControl = { type: "ephemeral" as const };
 
   if (state.floorPlanBase64) {
     content.push({ type: "text", text: "UPLOADED FLOOR PLAN (authoritative layout):" });
-    content.push({
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: (state.floorPlanMimeType || "image/jpeg") as
-          | "image/jpeg"
-          | "image/png"
-          | "image/webp"
-          | "image/gif",
-        data: state.floorPlanBase64,
-      },
-    });
+    try {
+      const optimizedPlan = await optimizeImageBufferForAi(
+        Buffer.from(state.floorPlanBase64, "base64"),
+        { maxEdge: 1568, quality: 82 },
+      );
+      content.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: optimizedPlan.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
+          data: optimizedPlan.base64,
+        },
+      });
+    } catch {
+      content.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: (state.floorPlanMimeType || "image/jpeg") as
+            | "image/jpeg"
+            | "image/png"
+            | "image/webp"
+            | "image/gif",
+          data: state.floorPlanBase64,
+        },
+      });
+    }
   }
 
   const schematic = await renderHighlightedFloorPlan(analysis.rooms, analysis.imageFrame);
@@ -568,24 +586,52 @@ async function requestRoomPlansOnce(opts: {
   }
 
   const inspirationUploads = (state.inspirationUploads ?? []).filter((u) => u.base64?.trim());
-  inspirationUploads.forEach((upload, i) => {
+  for (let i = 0; i < inspirationUploads.length; i++) {
+    const upload = inspirationUploads[i]!;
     content.push({
       type: "text",
       text: `STYLE REFERENCE PHOTO ${i + 1}/${inspirationUploads.length}${upload.label?.trim() ? ` — user note: ${upload.label.trim()}` : ""}:`,
     });
-    content.push({
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: (upload.mimeType || "image/jpeg") as
-          | "image/jpeg"
-          | "image/png"
-          | "image/webp"
-          | "image/gif",
-        data: upload.base64,
-      },
-    });
-  });
+    try {
+      const optimizedRef = await optimizeImageBufferForAi(Buffer.from(upload.base64, "base64"), {
+        maxEdge: 1280,
+        quality: 78,
+      });
+      content.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: optimizedRef.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
+          data: optimizedRef.base64,
+        },
+        ...(i === inspirationUploads.length - 1 ? { cache_control: cacheControl } : {}),
+      });
+    } catch {
+      content.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: (upload.mimeType || "image/jpeg") as
+            | "image/jpeg"
+            | "image/png"
+            | "image/webp"
+            | "image/gif",
+          data: upload.base64,
+        },
+        ...(i === inspirationUploads.length - 1 ? { cache_control: cacheControl } : {}),
+      });
+    }
+  }
+
+  if (inspirationUploads.length === 0) {
+    const lastImageIdx = content.map((block, idx) => ({ block, idx })).reverse().find(({ block }) => block.type === "image")?.idx;
+    if (lastImageIdx != null) {
+      const block = content[lastImageIdx];
+      if (block?.type === "image") {
+        content[lastImageIdx] = { ...block, cache_control: cacheControl };
+      }
+    }
+  }
 
   for (const room of roomsToCover) {
     for (const photo of getRoomPhotos(state, room.id)) {
@@ -625,7 +671,9 @@ async function requestRoomPlansOnce(opts: {
     inspirationUploads,
     roomsToCover,
   );
-  content.push({ type: "text", text: claudeTextPrompt });
+  content.push({ type: "text", text: DIRECTOR_STATIC_RULES, cache_control: cacheControl });
+  const dynamicPrompt = claudeTextPrompt.slice(DIRECTOR_STATIC_RULES.length).trimStart();
+  content.push({ type: "text", text: dynamicPrompt });
 
   pipelineLog("CLAUDE_ROOM_CONCEPTS", "claude request prepared", {
     attempt,

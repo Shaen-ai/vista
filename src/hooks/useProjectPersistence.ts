@@ -3,6 +3,7 @@
 import { useCallback, useRef } from "react";
 import { useConsumerDesignStore, type DesignBriefResult, type SavedProjectSummary } from "@/app/store";
 import { getAuthToken, authJsonHeaders } from "@/lib/authApi";
+import { isCloudflareChallengeResponse } from "@/lib/cloudflareChallenge";
 
 const API_BASE = "/api/vista/projects";
 
@@ -15,6 +16,7 @@ export type ShareStatus = {
 export type PersistApiError = {
   status?: number;
   message: string;
+  code?: "cloudflare_challenge";
 };
 
 export type CreateProjectResult =
@@ -36,6 +38,13 @@ async function readTruncatedResponseBody(res: Response): Promise<string> {
 
 function logPersistFailure(scope: string, status: number | undefined, body: string): void {
   console.warn(`[vista:persist] ${scope} failed`, { status, body: body || "(empty)" });
+}
+
+function persistErrorFromResponse(res: Response, body: string, fallback: string): PersistApiError {
+  if (isCloudflareChallengeResponse(res, body)) {
+    return { status: 403, code: "cloudflare_challenge", message: "cloudflare_challenge" };
+  }
+  return { status: res.status, message: body || res.statusText || fallback };
 }
 
 export interface VistaProjectApi {
@@ -196,7 +205,7 @@ export function useProjectPersistence(): VistaProjectApi {
         logPersistFailure("createProject", res.status, responseBody);
         return {
           ok: false,
-          error: { status: res.status, message: responseBody || res.statusText || "create failed" },
+          error: persistErrorFromResponse(res, responseBody, "create failed"),
         };
       }
       const json = await res.json();
@@ -260,7 +269,7 @@ export function useProjectPersistence(): VistaProjectApi {
         logPersistFailure("addVersion", res.status, responseBody);
         return {
           ok: false,
-          error: { status: res.status, message: responseBody || res.statusText || "version failed" },
+          error: persistErrorFromResponse(res, responseBody, "version failed"),
         };
       }
       const json = await res.json();

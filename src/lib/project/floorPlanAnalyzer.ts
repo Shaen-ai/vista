@@ -695,8 +695,17 @@ export async function analyzeFloorPlan(
 
   const hasDrawnImage = Boolean(drawnPlanBase64);
 
+  // Fast primary + slow fallback: run a cheap/fast vision model first; only fall
+  // back to the heavier model if it fails or returns low-confidence geometry.
+  // FLOOR_PLAN_ANALYSIS_MODEL is the floor-plan primary knob (default gpt-4o);
+  // the shared viewpoint/validate call sites keep their own gpt-5.5 default.
+  const floorPlanPrimaryModel = process.env.FLOOR_PLAN_ANALYSIS_MODEL?.trim() || "gpt-4o";
+  const floorPlanFallbackModel =
+    process.env.FLOOR_PLAN_ANALYSIS_FALLBACK_MODEL?.trim() || "gpt-5.5";
+
   pipelineLog("ANALYZE_FLOOR_PLAN", "openai floor plan analysis start", {
-    model: process.env.FLOOR_PLAN_ANALYSIS_MODEL || "gpt-5.5",
+    model: floorPlanPrimaryModel,
+    fallbackModel: floorPlanFallbackModel,
     mimeType: imageMimeType,
     planKB: Math.round((imageBase64.length * 3) / 4 / 1024),
     hasDrawnPlan: hasDrawnImage,
@@ -741,53 +750,90 @@ export async function analyzeFloorPlan(
     });
   }
 
-  pipelineLog("ANALYZE_FLOOR_PLAN", "OpenAI floor-plan request", {
-    model: process.env.FLOOR_PLAN_ANALYSIS_MODEL || "gpt-5.5",
-    hasDrawnImage,
-    autoDetect: !hasDrawnImage,
-  });
-
   const apiUrl = process.env.OPENAI_API_URL || "https://api.openai.com/v1/chat/completions";
-  const t0 = Date.now();
-  const response = await withRetry(async () => {
-    const res = await openAiFetch(
-      apiUrl,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openAiKey}`,
+
+  // Run one OpenAI vision pass with the given model → parsed + normalized analysis.
+  // Throws on request failure or empty/unparseable response.
+  const runFloorPlanPass = async (
+    model: string,
+  ): Promise<{ parsed: unknown; analysis: FloorPlanAnalysis }> => {
+    pipelineLog("ANALYZE_FLOOR_PLAN", "OpenAI floor-plan request", {
+      model,
+      hasDrawnImage,
+      autoDetect: !hasDrawnImage,
+    });
+    const t0 = Date.now();
+    const response = await withRetry(async () => {
+      const res = await openAiFetch(
+        apiUrl,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${openAiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: "user", content }],
+            response_format: { type: "json_object" },
+            max_completion_tokens: 16000,
+          }),
         },
-        body: JSON.stringify({
-          model: process.env.FLOOR_PLAN_ANALYSIS_MODEL || "gpt-5.5",
-          messages: [{ role: "user", content }],
-          response_format: { type: "json_object" },
-          max_completion_tokens: 16000,
-        }),
-      },
-      { vision: true },
-    );
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => "");
-      const err: Error & { status?: number } = new Error(
-        `OpenAI floor plan analysis failed (${res.status}): ${errBody.slice(0, 500)}`,
+        { vision: true },
       );
-      err.status = res.status;
-      throw err;
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "");
+        const err: Error & { status?: number } = new Error(
+          `OpenAI floor plan analysis failed (${res.status}): ${errBody.slice(0, 500)}`,
+        );
+        err.status = res.status;
+        throw err;
+      }
+      return res.json();
+    }, `Floor plan analysis (${model})`);
+    pipelineLog("ANALYZE_FLOOR_PLAN", "OpenAI floor-plan response", {
+      model,
+      durationSec: Math.round((Date.now() - t0) / 1000),
+    });
+
+    const assistantText = response?.choices?.[0]?.message?.content;
+    if (!assistantText || typeof assistantText !== "string") {
+      throw new Error("Floor plan analysis returned no text response");
     }
-    return res.json();
-  }, "Floor plan analysis");
-  pipelineLog("ANALYZE_FLOOR_PLAN", "OpenAI floor-plan response", {
-    durationSec: Math.round((Date.now() - t0) / 1000),
-  });
+    const parsedPass = parseAssistantJsonObject(assistantText);
+    return { parsed: parsedPass, analysis: normalizeAnalysis(parsedPass) };
+  };
 
-  const assistantText = response?.choices?.[0]?.message?.content;
-  if (!assistantText || typeof assistantText !== "string") {
-    throw new Error("Floor plan analysis returned no text response");
+  // Low confidence if no rooms were detected — a floor plan always has ≥1 room.
+  const isLowConfidence = (a: FloorPlanAnalysis): boolean => a.rooms.length === 0;
+
+  let parsed: unknown;
+  let analysis: FloorPlanAnalysis;
+  try {
+    ({ parsed, analysis } = await runFloorPlanPass(floorPlanPrimaryModel));
+    if (isLowConfidence(analysis) && floorPlanPrimaryModel !== floorPlanFallbackModel) {
+      pipelineLog(
+        "ANALYZE_FLOOR_PLAN",
+        "primary model low-confidence — falling back",
+        { primaryModel: floorPlanPrimaryModel, fallbackModel: floorPlanFallbackModel },
+        "warn",
+      );
+      ({ parsed, analysis } = await runFloorPlanPass(floorPlanFallbackModel));
+    }
+  } catch (primaryErr) {
+    if (floorPlanPrimaryModel === floorPlanFallbackModel) throw primaryErr;
+    pipelineLog(
+      "ANALYZE_FLOOR_PLAN",
+      "primary model failed — falling back",
+      {
+        primaryModel: floorPlanPrimaryModel,
+        fallbackModel: floorPlanFallbackModel,
+        error: primaryErr instanceof Error ? primaryErr.message.slice(0, 200) : String(primaryErr),
+      },
+      "warn",
+    );
+    ({ parsed, analysis } = await runFloorPlanPass(floorPlanFallbackModel));
   }
-
-  const parsed = parseAssistantJsonObject(assistantText);
-  let analysis = normalizeAnalysis(parsed);
 
   const modelImageHeightUnits = asNumber(isRecord(parsed) ? parsed.imageHeightUnits : undefined, 0);
   const imageHeightUnits = trueImageHeightUnits > 0 ? trueImageHeightUnits : modelImageHeightUnits;

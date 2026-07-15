@@ -13,10 +13,20 @@ import type { DetectedRoom } from "@/lib/project/types";
 import type { ViewpointFraming } from "@/lib/project/viewpointFraming";
 import { framingVisibleOpenings } from "@/lib/project/viewpointFraming";
 import {
+  formatHeroMasterAnalysis,
+  type HeroMasterAnalysis,
+} from "./heroPlacementMap";
+import {
+  getValidateModel,
+  prepareValidationImages,
+} from "@/lib/validationImageHelpers";
+import {
   isValidationTimeoutError,
   VALIDATION_MAX_RETRIES,
   validationAbortSignal,
 } from "@/lib/validationAiHelpers";
+
+export type ValidationCheck = "judge" | "openings" | "placement";
 
 export interface RenderValidationInput {
   mode: "master" | "secondary";
@@ -37,6 +47,12 @@ export interface RenderValidationInput {
   label?: string;
   /** Furniture labels for deterministic placement validation. */
   furnitureLabels?: string[];
+  /** When set, run only these checks (used on validation retries). */
+  onlyChecks?: ValidationCheck[];
+  /** Master judge: also extract furniture placement + decor lock for secondary views. */
+  extractHeroAnalysis?: boolean;
+  heroFraming?: ViewpointFraming | null;
+  expectedFurnitureList?: string[];
 }
 
 export interface RenderValidationResult {
@@ -44,6 +60,8 @@ export interface RenderValidationResult {
   reason: string;
   correctiveFeedback?: string;
   failureTypes: string[];
+  failedChecks?: ValidationCheck[];
+  heroAnalysis?: HeroMasterAnalysis;
 }
 
 export function isRenderValidationEnabled(): boolean {
@@ -53,8 +71,35 @@ export function isRenderValidationEnabled(): boolean {
   return !!getOpenAiApiKey();
 }
 
+function shouldRunCheck(check: ValidationCheck, onlyChecks?: ValidationCheck[]): boolean {
+  if (!onlyChecks?.length) return true;
+  return onlyChecks.includes(check);
+}
+
+function compassWallLabel(wall: string | null | undefined, fallback: string): string {
+  return wall ? `${wall.toUpperCase()} wall` : fallback;
+}
+
+function buildHeroExtractionInstructions(input: RenderValidationInput): string {
+  if (!input.extractHeroAnalysis || input.mode !== "master") return "";
+  const ahead = compassWallLabel(input.heroFraming?.aheadWall, "wall ahead of the camera");
+  const left = compassWallLabel(input.heroFraming?.leftWall, "wall on the camera's left");
+  const right = compassWallLabel(input.heroFraming?.rightWall, "wall on the camera's right");
+  const expectedPieces = (input.expectedFurnitureList ?? [])
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .join(", ");
+  return (
+    ' Also include "placements": string[] listing every visible furniture piece in the SECOND (render) image with wall position ' +
+    `(labels: ahead=${ahead}, left=${left}, right=${right}) and immediate neighbors; and "decor": string[] listing every visible decor item with enough detail to reproduce in another camera angle.` +
+    (expectedPieces ? ` Planned pieces: ${expectedPieces}.` : "") +
+    " Use empty arrays when none visible."
+  );
+}
+
 async function runRenderJudgeValidation(
   input: RenderValidationInput,
+  images: Awaited<ReturnType<typeof prepareValidationImages>>,
 ): Promise<RenderValidationResult | null> {
   const openAiKey = getOpenAiApiKey();
   if (!openAiKey) return null;
@@ -88,42 +133,43 @@ async function runRenderJudgeValidation(
           "A door opening rendered as a bare, empty, or gray recess without a visible door leaf and frame is a failure (door_unfinished); correctiveFeedback must say to render a finished closed door in that opening.",
         ].join(" ");
 
+  const heroFields = input.extractHeroAnalysis && input.mode === "master" ? ', "placements": string[], "decor": string[]' : "";
   const content: Array<Record<string, unknown>> = [
     {
       type: "text",
       text:
-        `${modeInstructions} ` +
-        'Respond JSON only: {"pass": boolean, "reason": string, "failureTypes": string[], "correctiveFeedback": string}. ' +
+        `${modeInstructions}${buildHeroExtractionInstructions(input)} ` +
+        `Respond JSON only: {"pass": boolean, "reason": string, "failureTypes": string[], "correctiveFeedback": string${heroFields}}. ` +
         "failureTypes may include: geometry_drift, removal_failed, no_design, furniture_inconsistent, decor_inconsistent, added_opening, ceiling_remodeled, wall_remodeled, door_unfinished, hero_copy, blocked_door, object_overlap, wall_clip, floating_object.",
     },
     {
       type: "image_url",
       image_url: {
-        url: `data:${input.originalMime};base64,${input.originalBase64}`,
+        url: `data:${images.original.mime};base64,${images.original.base64}`,
         detail: "high",
       },
     },
     {
       type: "image_url",
       image_url: {
-        url: `data:${input.renderedMime};base64,${input.renderedBase64}`,
+        url: `data:${images.rendered.mime};base64,${images.rendered.base64}`,
         detail: "high",
       },
     },
   ];
 
-  if (input.mode === "secondary" && input.heroBase64) {
+  if (input.mode === "secondary" && images.hero) {
     content.push({
       type: "image_url",
       image_url: {
-        url: `data:${input.heroMime || "image/png"};base64,${input.heroBase64}`,
+        url: `data:${images.hero.mime};base64,${images.hero.base64}`,
         detail: "high",
       },
     });
   }
 
   const apiUrl = process.env.OPENAI_API_URL || "https://api.openai.com/v1/chat/completions";
-  const model = process.env.FLOOR_PLAN_ANALYSIS_MODEL || "gpt-5.5";
+  const model = getValidateModel();
   const judgeLabel = input.label ? `render judge (${input.label})` : `render judge (${input.mode})`;
 
   const response = await withRetry(
@@ -198,7 +244,20 @@ async function runRenderJudgeValidation(
   const correctiveFeedback =
     typeof parsed?.correctiveFeedback === "string" ? parsed.correctiveFeedback : undefined;
 
-  return { pass, reason, correctiveFeedback, failureTypes };
+  let heroAnalysis: HeroMasterAnalysis | undefined;
+  if (input.extractHeroAnalysis && input.mode === "master" && pass) {
+    const placements = Array.isArray(parsed?.placements)
+      ? parsed.placements.filter((p): p is string => typeof p === "string" && !!p.trim())
+      : [];
+    const decor = Array.isArray(parsed?.decor)
+      ? parsed.decor.filter((d): d is string => typeof d === "string" && !!d.trim())
+      : [];
+    if (placements.length > 0 || decor.length > 0) {
+      heroAnalysis = formatHeroMasterAnalysis(placements, decor);
+    }
+  }
+
+  return { pass, reason, correctiveFeedback, failureTypes, heroAnalysis };
 }
 
 export async function validateProjectRender(
@@ -216,6 +275,15 @@ export async function validateProjectRender(
     return { pass: true, reason: "validation skipped", failureTypes: [] };
   }
 
+  const validationImages = await prepareValidationImages({
+    originalBase64: input.originalBase64,
+    originalMime: input.originalMime,
+    renderedBase64: input.renderedBase64,
+    renderedMime: input.renderedMime,
+    heroBase64: input.heroBase64,
+    heroMime: input.heroMime,
+  });
+
   const openingContext = buildOpeningValidationContext({
     visibleOpenings: input.framing ? framingVisibleOpenings(input.framing) : null,
     detectedRoom: input.detectedRoom ?? null,
@@ -226,13 +294,17 @@ export async function validateProjectRender(
     (input.windowBoxes?.length ?? 0) > 0 || (input.doorBoxes?.length ?? 0) > 0;
   const furnitureLabels = (input.furnitureLabels ?? []).filter((x) => x.trim());
   const openAiKey = getOpenAiApiKey();
+  const runOpenings = hasOpeningBoxes && shouldRunCheck("openings", input.onlyChecks);
+  const runPlacement =
+    furnitureLabels.length > 0 && shouldRunCheck("placement", input.onlyChecks);
+  const runJudge = shouldRunCheck("judge", input.onlyChecks);
 
-  const openingPromise = hasOpeningBoxes
+  const openingPromise = runOpenings
     ? validateOpenings({
-        originalBase64: input.originalBase64,
-        originalMime: input.originalMime,
-        renderedBase64: input.renderedBase64,
-        renderedMime: input.renderedMime,
+        originalBase64: validationImages.original.base64,
+        originalMime: validationImages.original.mime,
+        renderedBase64: validationImages.rendered.base64,
+        renderedMime: validationImages.rendered.mime,
         windowBoxes: input.windowBoxes,
         doorBoxes: input.doorBoxes,
         openingContext,
@@ -240,32 +312,32 @@ export async function validateProjectRender(
       })
     : Promise.resolve(null);
 
-  const placementPromise =
-    furnitureLabels.length > 0
-      ? validatePlacement({
-          renderedBase64: input.renderedBase64,
-          renderedMime: input.renderedMime,
-          doorBoxes: input.doorBoxes,
-          windowBoxes: input.windowBoxes,
-          furnitureLabels,
-          label: input.label ? `${input.label}-placement` : `${input.mode}-placement`,
-        })
-      : Promise.resolve(null);
+  const placementPromise = runPlacement
+    ? validatePlacement({
+        renderedBase64: validationImages.rendered.base64,
+        renderedMime: validationImages.rendered.mime,
+        doorBoxes: input.doorBoxes,
+        windowBoxes: input.windowBoxes,
+        furnitureLabels,
+        label: input.label ? `${input.label}-placement` : `${input.mode}-placement`,
+      })
+    : Promise.resolve(null);
 
-  const judgePromise = openAiKey
-    ? pipelineTimed(
-        "VALIDATE",
-        input.label ? `render judge (${input.label})` : `render judge (${input.mode})`,
-        () => runRenderJudgeValidation(input),
-        {
-          meta: {
-            mode: input.mode,
-            photoId: input.photoId,
-            projectId: input.projectId,
-            roomId: input.roomId,
+  const judgePromise =
+    openAiKey && runJudge
+      ? pipelineTimed(
+          "VALIDATE",
+          input.label ? `render judge (${input.label})` : `render judge (${input.mode})`,
+          () => runRenderJudgeValidation(input, validationImages),
+          {
+            meta: {
+              mode: input.mode,
+              photoId: input.photoId,
+              projectId: input.projectId,
+              roomId: input.roomId,
+            },
           },
-        },
-      ).catch((err) => {
+        ).catch((err) => {
         if (isValidationTimeoutError(err)) {
           pipelineLog(
             "VALIDATE",
@@ -336,21 +408,34 @@ export async function validateProjectRender(
       errorCode: openingCheck.failureType,
       extra: { mode: input.mode, reason: openingCheck.reason.slice(0, 200) },
     });
-    return fail(openingCheck.reason, [openingCheck.failureType], corrective);
+    return { ...fail(openingCheck.reason, [openingCheck.failureType], corrective), failedChecks: ["openings"] };
   }
 
   if (!openAiKey) {
     if (placementResult && !placementResult.skipped && !placementResult.pass) {
-      return fail(
-        placementResult.violations.map((v) => v.detail).join(" "),
-        placementResult.violations.map((v) => v.type),
-        placementResult.correctiveFeedback,
-      );
+      return {
+        ...fail(
+          placementResult.violations.map((v) => v.detail).join(" "),
+          placementResult.violations.map((v) => v.type),
+          placementResult.correctiveFeedback,
+        ),
+        failedChecks: ["placement"],
+      };
     }
     return { pass: true, reason: "extended validation skipped (no key)", failureTypes: [] };
   }
 
   if (!judgeResult) {
+    if (placementResult && !placementResult.skipped && !placementResult.pass) {
+      return {
+        ...fail(
+          placementResult.violations.map((v) => v.detail).join(" "),
+          placementResult.violations.map((v) => v.type),
+          placementResult.correctiveFeedback,
+        ),
+        failedChecks: ["placement"],
+      };
+    }
     return { pass: true, reason: "extended validation skipped (no key)", failureTypes: [] };
   }
 
@@ -358,6 +443,15 @@ export async function validateProjectRender(
 
   if (placementResult && !placementResult.skipped) {
     result = mergePlacementIntoValidation(result, placementResult);
+  }
+
+  if (!result.pass) {
+    const failedChecks: ValidationCheck[] = [];
+    if (!judgeResult.pass) failedChecks.push("judge");
+    if (placementResult && !placementResult.skipped && !placementResult.pass) {
+      failedChecks.push("placement");
+    }
+    result = { ...result, failedChecks: failedChecks.length > 0 ? failedChecks : ["judge"] };
   }
 
   logPipelineStage({

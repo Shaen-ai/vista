@@ -167,7 +167,7 @@ export async function runQuickRoomEditPipeline(
     hasStyleInspiration: !!input.styleInspiration,
     runShell: shapeConfig.runShell,
   });
-  const editResolution = (process.env.VISTA_EDIT_RESOLUTION || "4K").trim().toUpperCase();
+  const editResolution = (process.env.VISTA_EDIT_RESOLUTION || "2K").trim().toUpperCase();
 
   logQuickRoomFalStep({
     step: "banana",

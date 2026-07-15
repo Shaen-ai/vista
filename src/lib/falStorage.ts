@@ -1,6 +1,7 @@
 import "server-only";
 
 import { fal } from "@fal-ai/client";
+import { getCachedFalUploadUrl, setCachedFalUploadUrl } from "@/lib/falUploadCache";
 import { getFalKey } from "@/lib/serverAiKeys";
 import { buildPublicUploadUrl, saveUploadToDisk } from "@/lib/localUploadStorage";
 import { getUploadUserId } from "@/lib/uploadUserContext";
@@ -82,6 +83,16 @@ export async function uploadPublicImage(
   mime: string,
   opts?: UploadPublicImageOpts,
 ): Promise<string> {
+  const cached = getCachedFalUploadUrl(buffer, mime);
+  if (cached) {
+    pipelineLog("FAL_PIPELINE", "fal upload cache hit", {
+      label: deriveUploadLabel(opts),
+      bytes: buffer.byteLength,
+      mime,
+    });
+    return cached;
+  }
+
   const useLocal = (process.env.VISTA_FAL_USE_LOCAL_STORAGE || "").trim() === "1";
   const target = useLocal ? "local-disk" : "fal-storage";
   const label = deriveUploadLabel(opts);
@@ -122,7 +133,10 @@ export async function uploadPublicImage(
       },
       completeMeta: (url) => ({ urlHost: urlHost(url) }),
     },
-  );
+  ).then((url) => {
+    setCachedFalUploadUrl(buffer, mime, url);
+    return url;
+  });
 }
 
 export { ensureFalConfigured };

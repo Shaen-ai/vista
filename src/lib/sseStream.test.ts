@@ -1,6 +1,8 @@
-import test from "node:test";
+import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import { createSseEmitter, isStreamClosedError } from "./sseStream.ts";
+
+const decoder = new TextDecoder();
 
 test("isStreamClosedError matches ReadableStream closed controller", () => {
   assert.equal(
@@ -35,4 +37,34 @@ test("createSseEmitter swallows enqueue after close", () => {
   assert.equal(emit({ phase: "complete" }), false);
   close(); // second close must not throw
   assert.equal(enqueued.length, 1);
+});
+
+test("createSseEmitter heartbeat pings while open and stops on close", () => {
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    const chunks: string[] = [];
+    let closed = false;
+    const controller = {
+      enqueue(chunk: Uint8Array) {
+        if (closed) throw new TypeError("Invalid state: Controller is already closed");
+        chunks.push(decoder.decode(chunk));
+      },
+      close() {
+        closed = true;
+      },
+    } as unknown as ReadableStreamDefaultController<Uint8Array>;
+
+    const { emit, close } = createSseEmitter(controller, { heartbeatMs: 1000 });
+    mock.timers.tick(2500); // two heartbeats
+    assert.equal(chunks.filter((c) => c === ": keep-alive\n\n").length, 2);
+
+    emit({ phase: "generating" });
+    assert.ok(chunks.some((c) => c.startsWith("data: ")));
+
+    close();
+    mock.timers.tick(5000); // no more heartbeats after close
+    assert.equal(chunks.filter((c) => c === ": keep-alive\n\n").length, 2);
+  } finally {
+    mock.timers.reset();
+  }
 });

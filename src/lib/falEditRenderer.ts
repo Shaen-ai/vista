@@ -35,9 +35,10 @@ export interface EditStagingResult {
 }
 
 function resolveEditResolution(): EditResolution {
-  const raw = (process.env.VISTA_EDIT_RESOLUTION || "4K").trim().toUpperCase();
-  if (raw === "1K" || raw === "2K") return raw;
-  return "4K";
+  const raw = (process.env.VISTA_EDIT_RESOLUTION || "2K").trim().toUpperCase();
+  if (raw === "1K") return "1K";
+  if (raw === "4K") return "4K";
+  return "2K";
 }
 
 export async function renderEditStaging(input: EditStagingInput): Promise<EditStagingResult> {

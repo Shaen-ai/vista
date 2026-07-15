@@ -1,5 +1,7 @@
 import { formatApiErrorMessage } from "@/lib/apiError";
+import { TokenInsufficientError } from "@/lib/tokenErrors";
 import { throwIfAiServiceUnavailable, isAiServiceUnavailableError } from "@/lib/aiServiceError";
+import { throwIfCloudflareChallenge, isCloudflareSecurityChallengeError } from "@/lib/cloudflareChallenge";
 import { consumeSSE } from "@/lib/sseClient";
 import {
   extractGenerationDebug,
@@ -82,6 +84,7 @@ export async function analyzeAndRedesign(options: {
         headers: requestHeaders,
       });
       const geoRaw = await geoRes.text();
+      throwIfCloudflareChallenge(geoRes, geoRaw);
       let geoJson: { error?: string; code?: string; data?: RoomGeometry; debug?: unknown };
       try {
         geoJson = JSON.parse(geoRaw) as { error?: string; data?: RoomGeometry; debug?: unknown };
@@ -114,6 +117,9 @@ export async function analyzeAndRedesign(options: {
       }
     } catch (e) {
       if (isAiServiceUnavailableError(e)) {
+        throw e;
+      }
+      if (isCloudflareSecurityChallengeError(e)) {
         throw e;
       }
       if (phaseTraces.every((p) => p.name !== "room-geometry")) {
@@ -161,6 +167,7 @@ export async function analyzeAndRedesign(options: {
       headers: requestHeaders,
     });
     const rawBody = await res.text();
+    throwIfCloudflareChallenge(res, rawBody);
 
     let json: {
       error?: string;
@@ -187,6 +194,7 @@ export async function analyzeAndRedesign(options: {
       const debug = mergeGenerationClientTrace(traceStartedAt, phaseTraces);
       logGenerationClientTrace(debug);
       onDebug?.(debug);
+      throwIfCloudflareChallenge(res, rawBody);
       throw new Error(
         !res.ok && rawBody.trimStart().startsWith("<")
           ? "Server returned an HTML error page instead of JSON (often a gateway timeout or crash)."
@@ -251,21 +259,38 @@ export async function analyzeAndRedesign(options: {
       headers: requestHeaders,
     });
 
-    if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
+    if (!res.ok) {
       const rawBody = await res.text();
-      let json: { error?: string; balance?: number; required?: number; debug?: unknown } = {};
-      try {
-        json = JSON.parse(rawBody) as typeof json;
-      } catch { /* fall through with empty json */ }
+      throwIfCloudflareChallenge(res, rawBody);
+      if (res.headers.get("content-type")?.includes("application/json")) {
+        let json: { error?: string; balance?: number; required?: number; debug?: unknown } = {};
+        try {
+          json = JSON.parse(rawBody) as typeof json;
+        } catch { /* fall through with empty json */ }
+        phaseTraces.push({
+          name: phaseName,
+          ms: Date.now() - startedAt,
+          httpStatus: res.status,
+          error: formatApiErrorMessage(json.error, `${phaseName} failed.`),
+          server: extractGenerationDebug(json),
+        });
+        publishDebug();
+        return { res, json, rawBody };
+      }
       phaseTraces.push({
         name: phaseName,
         ms: Date.now() - startedAt,
         httpStatus: res.status,
-        error: formatApiErrorMessage(json.error, `${phaseName} failed.`),
-        server: extractGenerationDebug(json),
+        error: rawBody.trimStart().startsWith("<")
+          ? "HTML error page (gateway timeout or crash)."
+          : `${phaseName} failed.`,
       });
       publishDebug();
-      return { res, json, rawBody };
+      throw new Error(
+        rawBody.trimStart().startsWith("<")
+          ? "Server returned an HTML error page instead of JSON (often a gateway timeout or crash)."
+          : `${phaseName} failed.`,
+      );
     }
 
     try {
@@ -415,6 +440,7 @@ export async function runPhasedGeneration(options: {
   });
 
   const rawBody = await res.text();
+  throwIfCloudflareChallenge(res, rawBody);
 
   let json: {
     error?: string;
@@ -429,11 +455,13 @@ export async function runPhasedGeneration(options: {
       slotNotices?: string[];
     };
     balance?: number;
+    required?: number;
   };
 
   try {
     json = JSON.parse(rawBody);
   } catch {
+    throwIfCloudflareChallenge(res, rawBody);
     throw new Error(
       rawBody.trimStart().startsWith("<")
         ? "Server returned an HTML error page (gateway timeout)."
@@ -443,6 +471,13 @@ export async function runPhasedGeneration(options: {
 
   if (!res.ok || json.error) {
     throwIfAiServiceUnavailable(json);
+    if (res.status === 402) {
+      throw new TokenInsufficientError(
+        json.error || "Not enough tokens.",
+        json.balance ?? 0,
+        json.required ?? 0,
+      );
+    }
     throw new Error(json.error || `Phase "${phase}" generation failed.`);
   }
 
@@ -495,10 +530,12 @@ export async function runFinalViewGeneration(options: {
   });
 
   const rawBody = await res.text();
-  let json: { error?: string; code?: string; data?: { images?: Array<{ base64?: string; mimeType?: string }> }; balance?: number };
+  throwIfCloudflareChallenge(res, rawBody);
+  let json: { error?: string; code?: string; data?: { images?: Array<{ base64?: string; mimeType?: string }> }; balance?: number; required?: number };
   try {
     json = JSON.parse(rawBody);
   } catch {
+    throwIfCloudflareChallenge(res, rawBody);
     throw new Error(
       rawBody.trimStart().startsWith("<")
         ? "Server returned an HTML error page (gateway timeout)."
@@ -508,6 +545,13 @@ export async function runFinalViewGeneration(options: {
 
   if (!res.ok || json.error) {
     throwIfAiServiceUnavailable(json);
+    if (res.status === 402) {
+      throw new TokenInsufficientError(
+        json.error || "Not enough tokens.",
+        json.balance ?? 0,
+        json.required ?? 0,
+      );
+    }
     throw new Error(json.error || "Viewpoint render failed.");
   }
 

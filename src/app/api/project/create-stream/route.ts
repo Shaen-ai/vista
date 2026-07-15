@@ -72,7 +72,9 @@ export async function POST(request: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      const { emit: send, close } = createSseEmitter(controller);
+      // Heartbeat keeps the SSE connection alive during the long, silent
+      // floor-plan vision call (no events are emitted between ~10% and 100%).
+      const { emit: send, close } = createSseEmitter(controller, { heartbeatMs: 10_000 });
 
       try {
         pipelineLog("UPLOAD", "create-stream analysis source", { source: analysisSource });

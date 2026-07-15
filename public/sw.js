@@ -11,5 +11,15 @@ self.addEventListener("activate", () => {
 });
 
 self.addEventListener("fetch", (event) => {
+  // Never intercept API / streaming / non-GET requests. A pass-through SW
+  // mediating a streaming POST (e.g. the SSE /api/project/create-stream) stalls
+  // the stream — the browser must handle these directly, with no SW involvement.
+  let url;
+  try {
+    url = new URL(event.request.url);
+  } catch {
+    return;
+  }
+  if (event.request.method !== "GET" || url.pathname.startsWith("/api/")) return;
   event.respondWith(fetch(event.request));
 });

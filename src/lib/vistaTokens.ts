@@ -109,9 +109,28 @@ export async function fetchTokenBalance(): Promise<TokenBalanceResponse> {
   return json.data ?? { balance: 0, isAnonymous: true, amdPerToken: AMD_PER_TOKEN };
 }
 
-export async function grantAnonymousTokens(): Promise<TokenBalanceResponse> {
-  if (typeof window !== "undefined" && localStorage.getItem(ANONYMOUS_GRANTED_KEY) === "1") {
+/**
+ * Load the balance the server will actually charge — authenticated wallet when
+ * logged in, otherwise anonymous device grant + balance.
+ */
+export async function syncVistaTokenBalance(): Promise<TokenBalanceResponse> {
+  if (getAuthToken()) {
     return fetchTokenBalance();
+  }
+  return grantAnonymousTokens();
+}
+
+export async function grantAnonymousTokens(): Promise<TokenBalanceResponse> {
+  if (getAuthToken()) {
+    return fetchTokenBalance();
+  }
+
+  if (typeof window !== "undefined" && localStorage.getItem(ANONYMOUS_GRANTED_KEY) === "1") {
+    const existing = await fetchTokenBalance();
+    if (existing.balance > 0) {
+      return existing;
+    }
+    // Device id may have rotated or the session was cleared — retry grant.
   }
 
   const res = await fetch(`${apiBase()}/tokens/anonymous/grant`, {
