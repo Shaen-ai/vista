@@ -98,6 +98,7 @@ import {
   resolveQuickRoomType,
 } from "@/lib/quickRoom/syntheticRoomAnalysis";
 import { resolveQuickRenderModel } from "@/lib/quickRoom/quickRenderModel";
+import { buildQuickRoomRenderSession } from "@/lib/quickRoom/quickRoomStubBrief";
 import {
   isQuickRoomGalleryEditRequest,
   parseHasEditAnnotationFlag,
@@ -106,6 +107,8 @@ import {
   parsePriorDesignBriefFromForm,
   stubGalleryEditBrief,
 } from "@/lib/quickRoom/galleryEditBrief";
+import { extractStyleInspirationBrief } from "@/lib/quickRoom/extractStyleInspirationBrief";
+import { buildStyleInspirationPromptBlock } from "@/lib/quickRoom/quickEditPrompt";
 
 export const maxDuration = 180;
 
@@ -212,6 +215,14 @@ async function handleQuickRoomPost(request: NextRequest) {
         },
         { status: tokenCheck.status },
       );
+    }
+
+    if (phase === "brief" && isCustomMode && !isGalleryEdit) {
+      timer.mark("stub_brief", { customMode: true });
+      return NextResponse.json({
+        data: { renderSession: buildQuickRoomRenderSession(formData) },
+        debug: timer.finish("brief", { ok: true, stub: true, customMode: true }),
+      });
     }
 
     if (isGalleryEdit && phase === "brief") {
@@ -926,10 +937,18 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
             },
           );
 
-    const styleInspirationInlines = styleInspirations.map((item) => ({
-      mimeType: item.mimeType,
-      data: item.base64,
-    }));
+    let styleInspirationText: string | null = null;
+    if (!isPlaceOnly && styleInspirations.length > 0) {
+      styleInspirationText = await extractStyleInspirationBrief(styleInspirations);
+      timer.mark("style_inspiration_extract", {
+        imageCount: styleInspirations.length,
+        ok: !!styleInspirationText,
+        proseChars: styleInspirationText?.length ?? 0,
+      });
+    }
+    const styleInspirationBlock = styleInspirationText
+      ? buildStyleInspirationPromptBlock(styleInspirationText)
+      : "";
 
     const useFalMaster = resolveRenderProvider() === "fal" && !!referenceBase64;
     let falRenderSeed: number | undefined;
@@ -953,7 +972,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
         productCloseText: visualParts.productCloseText,
         scrapedInventoryExclusive,
         keepRoomShape,
-        styleInspirationInlines,
+        styleInspirationText,
       });
 
     let images: Array<{ base64: string; mimeType: string }>;
@@ -974,6 +993,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
         designPrompt: [
           brief.fullPrompt,
           geminiMerchantAppendix?.trim() ? geminiMerchantAppendix.trim().slice(0, 3800) : "",
+          styleInspirationBlock,
         ]
           .filter(Boolean)
           .join("\n\n")
@@ -986,8 +1006,7 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
         hasStructuralLines: !!structuralLineMap?.base64,
         hasObjectRemovalMask: !!normalizedRemovalMask?.base64,
       });
-      const styleInspo = styleInspirations[0];
-      timer.mark("fal_master_start", { hasInspiration: !!styleInspo?.base64 });
+      timer.mark("fal_master_start", { hasStyleInspirationText: !!styleInspirationText });
       const master = await renderRoomRedesign({
         photoBase64: referenceBase64!,
         photoMime: referenceImageMimeType || "image/jpeg",
@@ -996,8 +1015,6 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
         structuralLineMapMime: structuralLineMap?.mimeType,
         structuralLineStrokeOnly: structuralLineMap?.strokeOnly,
         originalPhotoBase64: referenceBase64!,
-        styleReferenceBase64: styleInspo?.base64,
-        styleReferenceMime: styleInspo?.mimeType,
         sessionId: `quick-${Date.now()}`,
         label: "quick-room-master",
         angleRole: "master",
@@ -1027,8 +1044,6 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
         structuralLineMapMime: structuralLineMap?.mimeType,
         structuralLineStrokeOnly: structuralLineMap?.strokeOnly,
         originalPhotoBase64: referenceBase64!,
-        styleReferenceBase64: styleInspo?.base64,
-        styleReferenceMime: styleInspo?.mimeType,
         sessionId: `quick-${Date.now()}`,
         label: "quick-room-master",
         angleRole: "master" as const,

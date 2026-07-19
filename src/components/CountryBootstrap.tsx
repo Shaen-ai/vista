@@ -14,6 +14,7 @@ import {
 type DetectCountryResponse = {
   data?: {
     country_code?: string;
+    detected?: boolean;
   };
 };
 
@@ -47,14 +48,17 @@ export function CountryBootstrap() {
         const json = (await res.json()) as DetectCountryResponse;
         const code = json.data?.country_code?.trim().toUpperCase();
         if (!code || !/^[A-Z]{2}$/.test(code)) throw new Error("invalid country code");
+        const detected = json.data?.detected === true;
         if (cancelled) return;
         setSelectedCountry(code);
         setCountryDetected(true);
-        // Default language by country until the visitor picks one explicitly.
+        // Default language by country only when IP geo is confident (not marketplace fallback AM).
         if (!hasPersistedVistaLocale()) {
-          setLocale(code === "AM" ? "hy" : "en");
+          if (detected && code === "AM") {
+            setLocale("hy");
+          }
         }
-        loadTawkWidget(code);
+        loadTawkWidget(detected && code === "AM" ? code : "EN");
       })
       .catch(() => {
         if (cancelled) return;

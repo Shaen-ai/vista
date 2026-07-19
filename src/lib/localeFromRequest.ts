@@ -26,32 +26,14 @@ function isBot(ua: string): boolean {
   return BOT_PATTERNS.some((p) => p.test(ua));
 }
 
-function localeFromAcceptLanguage(accept: string | null): VistaLocale | null {
-  if (!accept) return null;
-  const langs = accept
-    .split(",")
-    .map((part) => {
-      const [lang, q] = part.trim().split(";q=");
-      return { lang: lang.trim().toLowerCase(), q: q ? parseFloat(q) : 1 };
-    })
-    .sort((a, b) => b.q - a.q);
-
-  for (const { lang } of langs) {
-    const prefix = lang.split("-")[0];
-    if (prefix === "hy") return "hy";
-    if (prefix === "ru") return "ru";
-    if (prefix === "en") return "en";
-  }
-  return null;
-}
-
 /**
  * Resolve locale for server components (metadata, marketing pages).
  * Priority:
  *   1. Bots → always English (stable SEO signals)
  *   2. Cookie → user's explicit choice
- *   3. Accept-Language → browser preference
- *   4. DEFAULT_LOCALE fallback
+ *   3. DEFAULT_LOCALE fallback (English)
+ *
+ * Accept-Language is intentionally ignored — Armenian only when geo confirms AM (client).
  */
 export async function localeFromRequest(): Promise<VistaLocale> {
   const h = await headers();
@@ -62,9 +44,6 @@ export async function localeFromRequest(): Promise<VistaLocale> {
   const cookieStore = await cookies();
   const cookieVal = cookieStore.get(VISTA_LOCALE_COOKIE)?.value;
   if (isVistaLocale(cookieVal)) return cookieVal;
-
-  const fromAccept = localeFromAcceptLanguage(h.get("accept-language"));
-  if (fromAccept) return fromAccept;
 
   return DEFAULT_LOCALE;
 }

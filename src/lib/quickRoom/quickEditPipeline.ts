@@ -38,8 +38,8 @@ export interface QuickEditPipelineInput {
   objectRemovalMaskBase64?: string | null;
   /** Product collage sheets from buildGeminiProductVisualParts — banana only. */
   productSheetInlines: Array<{ mimeType: string; data: string }>;
-  /** Style inspiration — banana only. */
-  styleInspiration?: { base64: string; mimeType: string } | null;
+  /** Claude-extracted style prose — never sent as FAL image input. */
+  styleInspirationText?: string | null;
   brief: DesignBrief;
   designStyleLabel: string;
   productIntroText?: string;
@@ -68,6 +68,7 @@ export async function runQuickRoomEditPipeline(
   const roomId = "quick";
   const photoId = "master";
   const shapeConfig = resolveShapeCreativity(input.shapeCreativity ?? DEFAULT_SHAPE_CREATIVITY);
+  const styleInspirationText = input.styleInspirationText?.trim() || null;
 
   // 1. Optional object-removal prep (no opening analysis).
   const hadRemovalMask = !!input.objectRemovalMaskBase64?.trim();
@@ -123,7 +124,7 @@ export async function runQuickRoomEditPipeline(
     });
   }
 
-  // 3. Stage 2 — nano-banana furnish (geometry image first, then products + style).
+  // 3. Stage 2 — nano-banana furnish (geometry image first, then product sheets only).
   const sheets = input.productSheetInlines.slice(0, MAX_PRODUCT_SHEETS);
   const droppedSheetCount = input.productSheetInlines.length - sheets.length;
   if (droppedSheetCount > 0) {
@@ -134,20 +135,11 @@ export async function runQuickRoomEditPipeline(
     });
   }
 
-  const imageBase64List = [
-    geometryBase64,
-    ...sheets.map((s) => s.data),
-    ...(input.styleInspiration ? [input.styleInspiration.base64] : []),
-  ];
-  const imageMimeList = [
-    geometryMime,
-    ...sheets.map((s) => s.mimeType),
-    ...(input.styleInspiration ? [input.styleInspiration.mimeType] : []),
-  ];
+  const imageBase64List = [geometryBase64, ...sheets.map((s) => s.data)];
+  const imageMimeList = [geometryMime, ...sheets.map((s) => s.mimeType)];
 
   const imageRoles = buildQuickRoomImageRoles({
     collageSheetCount: sheets.length,
-    hasStyleInspiration: !!input.styleInspiration,
     runShell: shapeConfig.runShell,
   });
   const prompt = buildQuickRoomEditInstruction({
@@ -160,11 +152,11 @@ export async function runQuickRoomEditPipeline(
     placementMode: input.placementMode,
     preserveMode: shapeConfig.preserveMode,
     creativeMode: shapeConfig.creativeMode,
+    styleInspirationText,
   });
 
   const bananaImageRoles = buildQuickRoomBananaImageRoles({
     collageSheetCount: sheets.length,
-    hasStyleInspiration: !!input.styleInspiration,
     runShell: shapeConfig.runShell,
   });
   const editResolution = (process.env.VISTA_EDIT_RESOLUTION || "2K").trim().toUpperCase();
@@ -184,6 +176,8 @@ export async function runQuickRoomEditPipeline(
       loraScale: shapeConfig.loraScale,
       preserveMode: shapeConfig.preserveMode,
       creativeMode: shapeConfig.creativeMode,
+      styleInspirationMode: styleInspirationText ? "text" : "none",
+      styleInspirationChars: styleInspirationText?.length ?? 0,
     },
     imageIndexRoles: bananaImageRoles,
     extra: {
@@ -191,7 +185,8 @@ export async function runQuickRoomEditPipeline(
       imageRolesText: imageRoles,
       imageCount: imageBase64List.length,
       collageSheetCount: sheets.length,
-      hasStyleInspiration: !!input.styleInspiration,
+      styleInspirationMode: styleInspirationText ? "text" : "none",
+      styleInspirationChars: styleInspirationText?.length ?? 0,
       hadRemovalMask,
       droppedSheetCount,
       shellSeed,
@@ -208,6 +203,7 @@ export async function runQuickRoomEditPipeline(
     shapeCreativity: shapeConfig.level,
     runShell: shapeConfig.runShell,
     loraScale: shapeConfig.loraScale,
+    styleInspirationMode: styleInspirationText ? "text" : "none",
   });
 
   await emit({ step: "render", message: "Rendering your interior…", progress: 0.45 });

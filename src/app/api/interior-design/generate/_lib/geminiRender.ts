@@ -13,6 +13,7 @@ import { RENDER_GENERATION_CONFIG } from "@/lib/geminiImageConfig";
 import type { RoomGeometry } from "@/lib/roomGeometryTypes";
 import { logGeminiRequest } from "@/lib/logGeminiRequest";
 import { resolveRenderProvider, renderRoomImageViaOpenAi } from "@/lib/roomImageRenderer";
+import { buildStyleInspirationPromptBlock } from "@/lib/quickRoom/quickEditPrompt";
 
 export async function generateGeminiInteriorImage(opts: {
   fullPromptFallback: string;
@@ -33,7 +34,8 @@ export async function generateGeminiInteriorImage(opts: {
   productCloseText?: string;
   scrapedInventoryExclusive?: boolean;
   keepRoomShape?: boolean;
-  styleInspirationInlines?: Array<{ mimeType: string; data: string }>;
+  /** Claude-extracted style prose — never sent as image input. */
+  styleInspirationText?: string | null;
 }): Promise<Array<{ base64: string; mimeType: string }>> {
   const {
     fullPromptFallback,
@@ -53,22 +55,18 @@ export async function generateGeminiInteriorImage(opts: {
     productCloseText = "",
     scrapedInventoryExclusive,
     keepRoomShape,
-    styleInspirationInlines = [],
+    styleInspirationText,
   } = opts;
 
-  const styleInspirationIntro =
-    styleInspirationInlines.length > 0
-      ? `STYLE INSPIRATION IMAGES (${styleInspirationInlines.length}) — replicate this design aesthetic, color palette, materials, and spatial mood using ONLY the real catalog products referenced below. Do NOT copy specific furniture from these photos; extract the overall style.`
-      : "";
+  const styleInspirationBlock = styleInspirationText
+    ? buildStyleInspirationPromptBlock(styleInspirationText)
+    : "";
 
   if (referenceImageBase64 && resolveRenderProvider() === "openai") {
     const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
     const merchTxt = merchantAppendix?.trim() ?? "";
-    if (styleInspirationInlines.length > 0 && styleInspirationIntro) {
-      parts.push({ text: styleInspirationIntro });
-    }
-    for (const inline of styleInspirationInlines) {
-      parts.push({ inlineData: { mimeType: inline.mimeType, data: inline.data } });
+    if (styleInspirationBlock) {
+      parts.push({ text: styleInspirationBlock });
     }
     if (productImageParts.length > 0 && productIntroText) {
       parts.push({ text: productIntroText });
@@ -123,11 +121,8 @@ export async function generateGeminiInteriorImage(opts: {
         keepRoomShape,
       },
     );
-    if (styleInspirationInlines.length > 0 && styleInspirationIntro) {
-      parts.push({ text: styleInspirationIntro });
-    }
-    for (const inline of styleInspirationInlines) {
-      parts.push({ inlineData: { mimeType: inline.mimeType, data: inline.data } });
+    if (styleInspirationBlock) {
+      parts.push({ text: styleInspirationBlock });
     }
     if (productImageParts.length > 0 && productIntroText) {
       parts.push({ text: productIntroText });
@@ -148,12 +143,9 @@ export async function generateGeminiInteriorImage(opts: {
     }
     parts.push({ text: editPrompt });
   } else {
-    // No room image — style inspiration, then products, then generation prompt.
-    if (styleInspirationInlines.length > 0 && styleInspirationIntro) {
-      parts.push({ text: styleInspirationIntro });
-    }
-    for (const inline of styleInspirationInlines) {
-      parts.push({ inlineData: { mimeType: inline.mimeType, data: inline.data } });
+    // No room image — style text, then products, then generation prompt.
+    if (styleInspirationBlock) {
+      parts.push({ text: styleInspirationBlock });
     }
 
     if (productImageParts.length > 0 && productIntroText) {

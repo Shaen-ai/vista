@@ -1,6 +1,7 @@
 /**
  * Quick Room shape ↔ creativity slider (0 = keep room shape, 10 = creativity).
  * Always runs nano-banana for products/inspiration; varies shell LoRA + PRESERVE strength.
+ * Level 5 is the tuned default sweet spot; lower = tighter lock, higher = freer design.
  */
 
 export const DEFAULT_SHAPE_CREATIVITY = 5;
@@ -19,14 +20,14 @@ export interface ShapeCreativityConfig {
 
 const TABLE: ReadonlyArray<Omit<ShapeCreativityConfig, "level">> = [
   { runShell: true, loraScale: 1.5, preserveMode: "veryStrong", creativeMode: "none" },
-  { runShell: true, loraScale: 1.4, preserveMode: "veryStrong", creativeMode: "none" },
-  { runShell: true, loraScale: 1.3, preserveMode: "veryStrong", creativeMode: "none" },
+  { runShell: true, loraScale: 1.42, preserveMode: "veryStrong", creativeMode: "none" },
+  { runShell: true, loraScale: 1.35, preserveMode: "veryStrong", creativeMode: "none" },
+  { runShell: true, loraScale: 1.28, preserveMode: "veryStrong", creativeMode: "none" },
+  { runShell: true, loraScale: 1.24, preserveMode: "veryStrong", creativeMode: "none" },
   { runShell: true, loraScale: 1.2, preserveMode: "veryStrong", creativeMode: "none" },
-  { runShell: true, loraScale: 1.1, preserveMode: "veryStrong", creativeMode: "none" },
-  { runShell: true, loraScale: 1.0, preserveMode: "strong", creativeMode: "none" },
-  { runShell: true, loraScale: 0.9, preserveMode: "strong", creativeMode: "none" },
-  { runShell: true, loraScale: 0.8, preserveMode: "soft", creativeMode: "none" },
-  { runShell: true, loraScale: 0.7, preserveMode: "soft", creativeMode: "none" },
+  { runShell: true, loraScale: 1.12, preserveMode: "veryStrong", creativeMode: "none" },
+  { runShell: true, loraScale: 1.02, preserveMode: "strong", creativeMode: "none" },
+  { runShell: true, loraScale: 0.85, preserveMode: "soft", creativeMode: "none" },
   { runShell: false, preserveMode: "strong", creativeMode: "creative" },
   { runShell: false, preserveMode: "strong", creativeMode: "moreCreative" },
 ];

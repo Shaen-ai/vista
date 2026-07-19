@@ -33,6 +33,7 @@ import type {
 import {
   getRoomPhoto,
   getRoomPhotos,
+  isPlanOnlyProject,
   marketplaceMatchesFromMaterialSpec,
   marketplaceMatchFromProductLink,
   emptyRoomPhases,
@@ -113,6 +114,7 @@ import { runWithLogContext } from "@/lib/logSink";
 import { resolveFinishRoomRenderStrategy } from "./finishRoomRenderStrategy";
 import { optimizeImageBufferForAi } from "@/lib/optimizeImageForAi";
 import { buildProjectFalPrompt, buildProjectKontextPrompt } from "./buildProjectFalPrompt";
+import { renderFurnishedFloorPlanImage } from "./furnishedFloorPlanRenderer";
 import {
   assertAssignedPhotosHaveViewpoints,
   composeAllRoomsClaudeRenderPlansEnriched,
@@ -918,6 +920,74 @@ async function createProjectConceptImpl(
     state.status = "failed";
     state.error = err instanceof Error ? err.message : "Design concept creation failed";
     await setProject(state);
+    throw err;
+  }
+}
+
+/**
+ * Floor-plan-only path: render one furnished overview image (no room photos).
+ */
+export async function generateFurnishedFloorPlan(
+  projectId: string,
+  onProgress?: ProgressCallback,
+): Promise<ProjectState> {
+  const state = await getProject(projectId);
+  if (!state) throw new Error(`Project ${projectId} not found`);
+  if (!state.floorPlanConfirmed) throw new Error("Floor plan not confirmed");
+  if (!state.analysis) throw new Error("Floor plan not analyzed");
+  if (!state.concept) throw new Error("Design concept not created");
+  if (!isPlanOnlyProject(state)) {
+    throw new Error("Furnished floor plan is only available when no room photos are uploaded.");
+  }
+
+  state.furnishedPlanStatus = "generating";
+  state.furnishedPlanError = null;
+  state.error = null;
+  await setProject(state);
+
+  onProgress?.({
+    phase: "generating",
+    message: "Preparing furnished floor plan…",
+    progress: 0.1,
+  });
+
+  try {
+    onProgress?.({
+      phase: "generating",
+      message: "Rendering decorated floor plan…",
+      progress: 0.45,
+    });
+
+    const image = await renderFurnishedFloorPlanImage(state);
+
+    state.furnishedPlanRender = image;
+    state.furnishedPlanStatus = "review";
+    state.furnishedPlanError = null;
+    state.status = "reviewing";
+    await setProject(state);
+
+    onProgress?.({
+      phase: "complete",
+      message: "Decorated floor plan ready",
+      progress: 1.0,
+      data: {
+        furnishedPlanRender: image,
+        furnishedPlanStatus: state.furnishedPlanStatus,
+      },
+    });
+
+    return state;
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : "Furnished floor plan generation failed";
+    state.furnishedPlanStatus = "error";
+    state.furnishedPlanError = errMsg;
+    state.error = errMsg;
+    await setProject(state);
+    onProgress?.({
+      phase: "error",
+      message: errMsg,
+      data: { furnishedPlanStatus: "error" },
+    });
     throw err;
   }
 }

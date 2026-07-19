@@ -394,6 +394,10 @@ interface ConsumerDesignState {
   projectUtilityEntryPoints: UtilityEntryPoint[];
   /** Rooms the user traced in the upload-step "Draw plan" editor (seed for analysis). */
   projectDraftRooms: DetectedRoom[];
+  /** Floor-plan-only path: single furnished overview render. */
+  projectFurnishedPlanRender: { base64: string; mimeType: string } | null;
+  projectFurnishedPlanStatus: "pending" | "generating" | "review" | "error" | null;
+  projectFurnishedPlanError: string | null;
 
   // --- Saved projects (persistence) ---
   currentProjectDbId: string | null;
@@ -436,6 +440,9 @@ interface ConsumerDesignState {
     hasPdf?: boolean;
     suggestedRoomOrder?: string[];
     utilityEntryPoints?: UtilityEntryPoint[];
+    furnishedPlanRender?: { base64: string; mimeType: string } | null;
+    furnishedPlanStatus?: "pending" | "generating" | "review" | "error" | null;
+    furnishedPlanError?: string | null;
   }) => void;
   setProjectRooms: (
     rooms: RoomResult[] | ((prev: RoomResult[]) => RoomResult[]),
@@ -636,6 +643,9 @@ const initialState = {
   projectAnalysisProgress: 0,
   projectAnalysisMessage: "",
   projectDraftRooms: [] as DetectedRoom[],
+  projectFurnishedPlanRender: null as { base64: string; mimeType: string } | null,
+  projectFurnishedPlanStatus: null as "pending" | "generating" | "review" | "error" | null,
+  projectFurnishedPlanError: null as string | null,
   projectUtilityEntryPoints: [] as UtilityEntryPoint[],
   // --- Saved projects ---
   currentProjectDbId: null as string | null,
@@ -1075,6 +1085,15 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
       ...(data.utilityEntryPoints !== undefined
         ? { projectUtilityEntryPoints: data.utilityEntryPoints }
         : {}),
+      ...(data.furnishedPlanRender !== undefined
+        ? { projectFurnishedPlanRender: data.furnishedPlanRender }
+        : {}),
+      ...(data.furnishedPlanStatus !== undefined
+        ? { projectFurnishedPlanStatus: data.furnishedPlanStatus }
+        : {}),
+      ...(data.furnishedPlanError !== undefined
+        ? { projectFurnishedPlanError: data.furnishedPlanError }
+        : {}),
     }),
 
   setProjectRooms: (rooms) =>
@@ -1133,6 +1152,9 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
       projectAnalysisMessage: "",
       projectUtilityEntryPoints: [],
       projectDraftRooms: [],
+      projectFurnishedPlanRender: null,
+      projectFurnishedPlanStatus: null,
+      projectFurnishedPlanError: null,
     });
   },
 

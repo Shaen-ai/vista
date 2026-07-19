@@ -836,6 +836,17 @@ export interface ProjectState {
   locale?: string;
   /** Linked Laravel design_projects.id for PDF persistence. */
   laravelProjectId?: number | null;
+  /** Single overview render when user uploaded a floor plan with no room photos. */
+  furnishedPlanRender?: { base64: string; mimeType: string } | null;
+  furnishedPlanStatus?: FurnishedPlanStatus;
+  furnishedPlanError?: string | null;
+}
+
+export type FurnishedPlanStatus = "pending" | "generating" | "review" | "error";
+
+/** True when the project has zero uploaded room photos (floor-plan-only path). */
+export function isPlanOnlyProject(state: Pick<ProjectState, "uploadedPhotos">): boolean {
+  return (state.uploadedPhotos?.length ?? 0) === 0;
 }
 
 export function getRoomPhoto(

@@ -34,6 +34,7 @@ export const PIPELINE_STEPS = {
   ASSIGN_PHOTOS_VIEWPOINTS: "4·assign-photos+viewpoints",
   ANALYZE_IMAGES_VIEWPOINTS: "5·analyze-images+viewpoints",
   CLAUDE_ROOM_CONCEPTS: "5·claude-room-concepts",
+  CLAUDE_STYLE: "6·claude-style-inspiration",
   ROOM_OPENINGS: "5·room-openings",
   ASSEMBLE_PROMPT: "6·assemble-gemini-prompt",
   GEMINI_GENERATE: "7·gemini-generate",

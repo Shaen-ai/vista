@@ -227,7 +227,46 @@ export function useProjectSSE() {
     return last;
   };
 
-  return { createProject, createConcept, generateRoom, cancelActiveRoomGeneration };
+  const generateFurnishedPlan = async (
+    projectId: string,
+    onProgress: (event: ProgressEvent) => void,
+    options?: { action?: "generate" | "regenerate" },
+  ): Promise<ProgressEvent> => {
+    const action = options?.action ?? "generate";
+    const { authHeaders } = authContextForApi();
+    const res = await fetch(`/api/project/${projectId}/generate-furnished-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({ action }),
+    });
+
+    if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
+      const json = (await res.json()) as {
+        error?: string;
+        balance?: number;
+        required?: number;
+      };
+      throwIfAiServiceUnavailable(json);
+      if (res.status === 402) {
+        throw new TokenInsufficientError(
+          sanitizeUserFacingMessage(json.error || "Not enough tokens."),
+          json.balance ?? 0,
+          json.required ?? 0,
+        );
+      }
+      throw new Error(sanitizeUserFacingMessage(json.error || "Furnished floor plan generation failed"));
+    }
+
+    const last = await consumeSSE(res, onProgress);
+    if (!last?.data) {
+      throw new Error("Furnished floor plan generation did not complete");
+    }
+    track("project_furnished_plan_generated", { action });
+    dispatchSpendUpdate();
+    return last;
+  };
+
+  return { createProject, createConcept, generateRoom, generateFurnishedPlan, cancelActiveRoomGeneration };
 }
 
 export type { ProgressEvent };

@@ -8,7 +8,7 @@ import {
 } from "@/lib/consumerCatalog";
 import { buildGeminiProductVisualParts } from "@/lib/buildGeminiProductVisualParts";
 import { checkTokensServer, consumeTokensServer } from "@/lib/serverVistaTokens";
-import { getAnthropicApiKey, getGoogleGenerativeAiApiKey } from "@/lib/serverAiKeys";
+import { getAnthropicApiKey, getFalKey, getGoogleGenerativeAiApiKey } from "@/lib/serverAiKeys";
 import { buildSpendResponse, isDevSpendEnabled } from "@/lib/aiSpend";
 import { PUBLIC_AI_SERVICE_UNAVAILABLE, PUBLIC_AI_UNAVAILABLE } from "@/lib/tunzoneAi";
 import type { ProductPurchaseLink } from "@/lib/productPurchaseLinks";
@@ -21,8 +21,10 @@ import { pipelineLog } from "@/lib/pipelineLog";
 import { resolveQuickRenderModel } from "@/lib/quickRoom/quickRenderModel";
 import { bootstrapQuickRoomReference } from "@/lib/quickRoom/bootstrapReferenceImage";
 import { runQuickRoomEditPipeline } from "@/lib/quickRoom/quickEditPipeline";
+import { extractStyleInspirationBrief } from "@/lib/quickRoom/extractStyleInspirationBrief";
 import { parseShapeCreativityParam } from "@/lib/quickRoom/shapeCreativity";
 import { runQuickRoomGalleryEditPipeline } from "@/lib/quickRoom/quickRoomGalleryEdit";
+import { buildQuickRoomRenderSession } from "@/lib/quickRoom/quickRoomStubBrief";
 import { optimizeImageBufferForAi } from "@/lib/optimizeImageForAi";
 import { orderMerchantBlockIds } from "./merchantBlock";
 import { renderWithEmptyRetry, runRenderVision } from "./renderPipeline";
@@ -141,19 +143,37 @@ export async function runQuickRoomRenderPhase(opts: {
     "post-fix-v4",
   );
 
-  const renderSession = parseRenderSession(formData.get("renderSession"));
+  let renderSession = parseRenderSession(formData.get("renderSession"));
+  if (!renderSession?.brief && isCustomMode) {
+    renderSession = buildQuickRoomRenderSession(formData);
+    timer.mark("stub_render_session", { ok: true });
+  }
   const isGalleryEditSessionEarly = renderSession?.renderMode === "gallery-edit";
+  const useEditPipelineEngine = resolveQuickRenderModel() === "edit-pipeline";
 
-  if (!isGalleryEditSessionEarly && !googleKey) {
-    const isDev = process.env.NODE_ENV === "development";
-    const msg = isDev ? PUBLIC_AI_SERVICE_UNAVAILABLE : PUBLIC_AI_UNAVAILABLE;
-    return { status: 503, body: { error: msg } };
+  if (!isGalleryEditSessionEarly) {
+    if (useEditPipelineEngine) {
+      if (!getFalKey()) {
+        return {
+          status: 503,
+          body: {
+            error: "Quick Room render requires FAL. Configure FAL_KEY.",
+            debug: timer.finish("render", { ok: false }),
+          },
+        };
+      }
+    } else if (!googleKey) {
+      const isDev = process.env.NODE_ENV === "development";
+      const msg = isDev ? PUBLIC_AI_SERVICE_UNAVAILABLE : PUBLIC_AI_UNAVAILABLE;
+      return { status: 503, body: { error: msg } };
+    }
   }
 
   timer.mark("render_session", {
     ok: Boolean(renderSession?.brief),
     selectedCount: renderSession?.selectedForGemini?.length ?? 0,
     renderMode: renderSession?.renderMode ?? "initial",
+    stubbed: isCustomMode && !renderSessionRaw,
   });
   if (!renderSession?.brief) {
     return {
@@ -437,12 +457,16 @@ export async function runQuickRoomRenderPhase(opts: {
           cellRefByCatalogId: visualParts.cellRefByCatalogId,
         });
 
-  const styleInspirationInlines = isPlaceOnly
-    ? []
-    : styleInspirations.map((item) => ({
-        mimeType: item.mimeType,
-        data: item.base64,
-      }));
+  let styleInspirationText: string | null = null;
+  if (!isPlaceOnly && styleInspirations.length > 0) {
+    await emitProgress?.({ message: "Analyzing style inspiration…", progress: 0.04 });
+    styleInspirationText = await extractStyleInspirationBrief(styleInspirations);
+    timer.mark("style_inspiration_extract", {
+      imageCount: styleInspirations.length,
+      ok: !!styleInspirationText,
+      proseChars: styleInspirationText?.length ?? 0,
+    });
+  }
 
   const useEditPipeline = resolveQuickRenderModel() === "edit-pipeline" && !!referenceBase64;
 
@@ -465,9 +489,7 @@ export async function runQuickRoomRenderPhase(opts: {
       placementMode,
       objectRemovalMaskBase64: isPlaceOnly ? null : effectiveObjectRemovalMask?.base64 ?? null,
       productSheetInlines: visualParts.productImageParts.map((p) => p.inlineData),
-      styleInspiration: !isPlaceOnly && styleInspirations[0]
-        ? { base64: styleInspirations[0].base64, mimeType: styleInspirations[0].mimeType }
-        : null,
+      styleInspirationText,
       brief,
       designStyleLabel: sessionStyleLabel || designStyleLabel,
       productIntroText: visualParts.productIntroText,
@@ -531,7 +553,7 @@ export async function runQuickRoomRenderPhase(opts: {
         productCloseText: visualParts.productCloseText,
         scrapedInventoryExclusive,
         keepRoomShape,
-        styleInspirationInlines,
+        styleInspirationText,
       });
 
     await emitProgress?.({ message: "Rendering your interior…", progress: 0.25 });
@@ -555,23 +577,28 @@ export async function runQuickRoomRenderPhase(opts: {
     };
   }
 
-  await emitProgress?.({ message: "Matching products in your design…", progress: 0.85 });
+  let finalVisionIds: string[] | null = null;
+  if (!renderIsCustomMode) {
+    await emitProgress?.({ message: "Matching products in your design…", progress: 0.85 });
 
-  const visionResult = await runRenderVision({
-    images,
-    anthropicKey,
-    selectedForGemini,
-    pinnedMpKeysForVision: pinnedMpKeysList,
-    collageIncludedIds: visualParts.includedCatalogIds,
-    allowedCatalogKeys: new Set(catalogById.keys()),
-    catalogById,
-    brief,
-    includedPinnedIds: visualParts.includedPinnedIds,
-    timer,
-    phase: "render",
-  });
-  images = visionResult.images;
-  const finalVisionIds = visionResult.finalVisionIds;
+    const visionResult = await runRenderVision({
+      images,
+      anthropicKey,
+      selectedForGemini,
+      pinnedMpKeysForVision: pinnedMpKeysList,
+      collageIncludedIds: visualParts.includedCatalogIds,
+      allowedCatalogKeys: new Set(catalogById.keys()),
+      catalogById,
+      brief,
+      includedPinnedIds: visualParts.includedPinnedIds,
+      timer,
+      phase: "render",
+    });
+    images = visionResult.images;
+    finalVisionIds = visionResult.finalVisionIds;
+  } else {
+    timer.mark("render_vision", { skipped: true, reason: "custom_mode" });
+  }
 
   const responseSessionId = `id-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const flooringSlotIds = extractFlooringSlotIds(undefined, catalogById, selectedForGemini);

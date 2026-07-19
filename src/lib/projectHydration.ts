@@ -109,6 +109,9 @@ interface OrchestratorProjectResponse {
     } | null;
   }>;
   inspirationUploads?: Array<{ base64: string; mimeType: string; label: string }>;
+  furnishedPlanRender?: { base64: string; mimeType: string } | null;
+  furnishedPlanStatus?: "pending" | "generating" | "review" | "error" | null;
+  furnishedPlanError?: string | null;
 }
 
 function mapOrchestratorUploadedPhotos(
@@ -475,6 +478,9 @@ async function hydrateFullProjectFromOrchestrator(
         currentRoomIndex: data.currentRoomIndex ?? 0,
         hasPdf: data.hasPdf ?? false,
         suggestedRoomOrder: data.suggestedRoomOrder ?? [],
+        furnishedPlanRender: data.furnishedPlanRender ?? null,
+        furnishedPlanStatus: data.furnishedPlanStatus ?? null,
+        furnishedPlanError: data.furnishedPlanError ?? null,
       });
     } else {
       useConsumerDesignStore.setState({ projectId: orchestratorId });

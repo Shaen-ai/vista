@@ -7,6 +7,7 @@ import {
   buildQuickRoomBananaImageRoles,
   buildQuickRoomEditInstruction,
   buildQuickRoomImageRoles,
+  buildStyleInspirationPromptBlock,
 } from "./quickEditPrompt";
 
 const brief: Pick<DesignBrief, "subject" | "arrangement"> = {
@@ -17,18 +18,17 @@ const brief: Pick<DesignBrief, "subject" | "arrangement"> = {
 test("image roles: staged shell is sole geometry authority", () => {
   const roles = buildQuickRoomImageRoles({
     collageSheetCount: 0,
-    hasStyleInspiration: false,
     runShell: true,
   });
   assert.match(roles, /FIRST image is the staged empty room/);
   assert.match(roles, /sole authority for walls, openings, ceiling, floor, and camera/);
   assert.doesNotMatch(roles, /PRODUCT REFERENCE/);
+  assert.doesNotMatch(roles, /STYLE INSPIRATION/);
 });
 
 test("image roles: original photo when runShell is false", () => {
   const roles = buildQuickRoomImageRoles({
     collageSheetCount: 0,
-    hasStyleInspiration: false,
     runShell: false,
   });
   assert.match(roles, /FIRST image is the original room photo/);
@@ -38,21 +38,38 @@ test("image roles: original photo when runShell is false", () => {
 test("banana image roles: original photo when runShell is false", () => {
   const roles = buildQuickRoomBananaImageRoles({
     collageSheetCount: 0,
-    hasStyleInspiration: false,
     runShell: false,
   });
   assert.equal(roles[0], "0: original room photo — geometry authority");
 });
 
-test("image roles enumerate product sheets and style inspiration", () => {
+test("image roles enumerate product sheets only (no style image index)", () => {
   const roles = buildQuickRoomImageRoles({
     collageSheetCount: 2,
-    hasStyleInspiration: true,
     runShell: true,
   });
   assert.match(roles, /Images 2-3 are PRODUCT REFERENCE SHEETS/);
-  assert.match(roles, /Image 4 is STYLE INSPIRATION/);
-  assert.doesNotMatch(roles, /GOLD LINES/);
+  assert.doesNotMatch(roles, /STYLE INSPIRATION/);
+});
+
+test("style inspiration prompt block forbids geometry copy", () => {
+  const block = buildStyleInspirationPromptBlock(
+    "STYLE FROM INSPIRATION: warm neutrals, oak floors, soft daylight.",
+  );
+  assert.match(block, /text only — do NOT copy any room geometry/);
+  assert.match(block, /FIRST image's room only/);
+});
+
+test("edit instruction injects style inspiration text in core prompt", () => {
+  const prompt = buildQuickRoomEditInstruction({
+    brief,
+    designStyleLabel: "Scandinavian",
+    imageRoles: "IMAGE ROLES: test.",
+    styleInspirationText: "STYLE FROM INSPIRATION: warm oak and linen.",
+  });
+  assert.match(prompt, /STYLE INSPIRATION \(text only/);
+  assert.match(prompt, /warm oak and linen/);
+  assert.match(prompt, /PRESERVE: Keep the exact room shape from the FIRST image/);
 });
 
 test("preserve block always present for all modes", () => {

@@ -2986,7 +2986,7 @@ function ProjectDesignHubStep({
 }) {
   const rooms = Array.isArray(roomsProp) ? roomsProp : [];
   const { t } = useTranslation();
-  const { generateRoom: streamGenerateRoom } = useProjectSSE();
+  const { generateRoom: streamGenerateRoom, generateFurnishedPlan: streamGenerateFurnishedPlan } = useProjectSSE();
   const {
     addVersion,
     patchProject,
@@ -3016,6 +3016,13 @@ function ProjectDesignHubStep({
   const hubPanelRef = useRef<HTMLDivElement>(null);
   const [pendingGenerateRoomId, setPendingGenerateRoomId] = useState<string | null>(null);
   const [selectionFlashRoomId, setSelectionFlashRoomId] = useState<string | null>(null);
+  const isPlanOnly = roomPhotos.length === 0;
+  const furnishedPlanRender = useConsumerDesignStore((s) => s.projectFurnishedPlanRender);
+  const furnishedPlanError = useConsumerDesignStore((s) => s.projectFurnishedPlanError);
+  const projectError = useConsumerDesignStore((s) => s.projectError);
+  const setProjectData = useConsumerDesignStore((s) => s.setProjectData);
+  const [planGenerating, setPlanGenerating] = useState(false);
+  const [planProgressMsg, setPlanProgressMsg] = useState("");
 
   const trackRoomGenerationStart = useCallback((roomId: string) => {
     setGeneratingRoomIds((prev) => new Set(prev).add(roomId));
@@ -3133,6 +3140,36 @@ function ProjectDesignHubStep({
       cancelled = true;
     };
   }, [projectId, roomsProp, setRooms]);
+
+  useEffect(() => {
+    if (!projectId || !isPlanOnly) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/project/${projectId}`, { cache: "no-store" });
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
+        const data = json.data as {
+          furnishedPlanRender?: { base64: string; mimeType: string } | null;
+          furnishedPlanStatus?: "pending" | "generating" | "review" | "error" | null;
+          furnishedPlanError?: string | null;
+        };
+        if (!cancelled && data) {
+          setProjectData({
+            id: projectId,
+            furnishedPlanRender: data.furnishedPlanRender ?? null,
+            furnishedPlanStatus: data.furnishedPlanStatus ?? null,
+            furnishedPlanError: data.furnishedPlanError ?? null,
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, isPlanOnly, setProjectData]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -3513,6 +3550,79 @@ function ProjectDesignHubStep({
     ],
   );
 
+  const startFurnishedPlanGeneration = useCallback(
+    async (opts?: { regenerate?: boolean }) => {
+      if (!projectId) return;
+      if (planGenerating) return;
+      const tokenAction = opts?.regenerate ? "regenerate" : "generate";
+      if (!assertSufficientTokensForAction(tokenAction, tokenBalance, setProjectError, t)) {
+        return;
+      }
+      setProjectError(null);
+      setPlanGenerating(true);
+      setPlanProgressMsg(t("project.decoratedPlanGenerating"));
+      try {
+        const event = await streamGenerateFurnishedPlan(
+          projectId,
+          (ev) => {
+            if (ev.message) setPlanProgressMsg(ev.message);
+          },
+          { action: tokenAction },
+        );
+        applyPostRenderBalance(event, setTokenBalance);
+        const data = event.data as {
+          furnishedPlanRender?: { base64: string; mimeType: string };
+          furnishedPlanStatus?: string;
+        };
+        if (data?.furnishedPlanRender?.base64) {
+          setProjectData({
+            id: projectId,
+            furnishedPlanRender: data.furnishedPlanRender,
+            furnishedPlanStatus: "review",
+            furnishedPlanError: null,
+          });
+        } else {
+          const res = await fetch(`/api/project/${projectId}`, { cache: "no-store" });
+          const json = await res.json();
+          const remote = json.data as {
+            furnishedPlanRender?: { base64: string; mimeType: string } | null;
+            furnishedPlanStatus?: "pending" | "generating" | "review" | "error" | null;
+            furnishedPlanError?: string | null;
+          };
+          if (remote) {
+            setProjectData({
+              id: projectId,
+              furnishedPlanRender: remote.furnishedPlanRender ?? null,
+              furnishedPlanStatus: remote.furnishedPlanStatus ?? null,
+              furnishedPlanError: remote.furnishedPlanError ?? null,
+            });
+          }
+        }
+      } catch (err) {
+        if (handleAiServiceUnavailableClientError(err, onAiServiceUnavailable)) {
+          setProjectError(null);
+        } else if (handleTokenBillingClientError(err, setTokenBalance, setProjectError, t)) {
+          /* token message set */
+        } else {
+          setProjectError(userFacingError(err, t("common.error")));
+        }
+      } finally {
+        setPlanGenerating(false);
+      }
+    },
+    [
+      projectId,
+      planGenerating,
+      tokenBalance,
+      setProjectError,
+      setTokenBalance,
+      streamGenerateFurnishedPlan,
+      setProjectData,
+      onAiServiceUnavailable,
+      t,
+    ],
+  );
+
   const startNextViewGeneration = useCallback(
     async (roomId: string, opts?: { openRoom?: boolean }) => {
       if (!projectId) return;
@@ -3756,9 +3866,11 @@ function ProjectDesignHubStep({
           </p>
         )}
         <p className="cd-step-subtitle">
-          {allApproved
-            ? t("project.hubAllApprovedHint")
-            : t("project.hubSubtitleDesignRooms")}
+          {isPlanOnly
+            ? t("project.hubSubtitlePlanOnly")
+            : allApproved
+              ? t("project.hubAllApprovedHint")
+              : t("project.hubSubtitleDesignRooms")}
         </p>
         {generatingRoomIds.size > 0 && (
           <p className="text-xs text-[var(--muted-foreground)]">
@@ -3778,19 +3890,19 @@ function ProjectDesignHubStep({
           <ArrowLeft size={16} /> {t("common.back")}
         </button>
       </div>
-      {showPdfReadyCard && (
+      {showPdfReadyCard && !isPlanOnly && (
         <ProjectFinalizeCard
           variant="ready"
           loading={projectLoading}
           onBuildPdf={() => void finalizeProject()}
         />
       )}
-      {allApproved && !hasPdf && serverCanFinalize === false && (
+      {allApproved && !hasPdf && serverCanFinalize === false && !isPlanOnly && (
         <p className="text-sm text-center text-amber-600 dark:text-amber-400 px-4">
           {t("project.finalizeNotReady")}
         </p>
       )}
-      {hasPdf && projectId && (
+      {hasPdf && projectId && !isPlanOnly && (
         <ProjectFinalizeCard
           variant="complete"
           projectName={concept?.projectName}
@@ -3824,7 +3936,80 @@ function ProjectDesignHubStep({
           />
         );
       })()}
-      {selectedHubRoomId && hubView === "floorPlan" && (() => {
+      {isPlanOnly && hubView === "floorPlan" && (
+        <div
+          ref={hubPanelRef}
+          className="flex flex-col items-center gap-4 p-4 rounded-2xl border border-[var(--border)] bg-[var(--card)] w-full max-w-lg mx-auto"
+        >
+          <div className="text-center">
+            <p className="text-sm font-semibold">{t("project.decoratedPlanTitle")}</p>
+            <p className="text-xs text-[var(--muted-foreground)] mt-1 max-w-md">
+              {t("project.decoratedPlanSubtitle")}
+            </p>
+            {concept?.overallStyle && (
+              <p className="text-xs text-[var(--muted-foreground)] mt-2">
+                {concept.overallStyle}
+              </p>
+            )}
+          </div>
+          {(furnishedPlanError || projectError) && !furnishedPlanRender?.base64 && (
+            <p className="text-xs text-red-600 dark:text-red-400 text-center max-w-md">
+              {sanitizeUserFacingMessage(furnishedPlanError ?? projectError ?? "")}
+            </p>
+          )}
+          {planGenerating ? (
+            <div className="flex flex-col items-center gap-2 py-4">
+              <Loader2 size={28} className="animate-spin text-[var(--primary)]" />
+              <p className="text-xs text-[var(--muted-foreground)]">{planProgressMsg}</p>
+            </div>
+          ) : furnishedPlanRender?.base64 ? (
+            <div className="flex flex-col items-center gap-3 w-full">
+              <button
+                type="button"
+                onClick={() =>
+                  setLightboxSrc(
+                    `data:${furnishedPlanRender.mimeType};base64,${furnishedPlanRender.base64}`,
+                  )
+                }
+                className="rounded-xl overflow-hidden border border-[var(--border)] hover:brightness-105 transition-all cursor-pointer max-w-full"
+              >
+                <img
+                  src={`data:${furnishedPlanRender.mimeType};base64,${furnishedPlanRender.base64}`}
+                  alt={t("project.decoratedPlanTitle")}
+                  className="max-h-64 w-full object-contain bg-[var(--muted)]"
+                />
+              </button>
+              <p className="text-xs text-green-600 dark:text-green-400">{t("project.decoratedPlanReady")}</p>
+              <button
+                type="button"
+                onClick={() => setProjectStep("complete")}
+                className="px-5 py-2.5 rounded-xl bg-[var(--primary)] text-white text-sm font-semibold hover:brightness-110 transition-all cursor-pointer"
+              >
+                {t("project.decoratedPlanDone")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void startFurnishedPlanGeneration({ regenerate: true })}
+                disabled={hubInsufficientForRegenerate}
+                className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline cursor-pointer disabled:opacity-50"
+              >
+                {t("project.regenerateDecoratedPlan")}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void startFurnishedPlanGeneration()}
+              disabled={hubInsufficientForGenerate}
+              className="px-5 py-2.5 rounded-xl bg-[var(--primary)] text-white text-sm font-semibold hover:brightness-110 transition-all cursor-pointer disabled:opacity-60 flex items-center gap-2"
+            >
+              <Sparkles size={16} />
+              {t("project.generateDecoratedPlan")}
+            </button>
+          )}
+        </div>
+      )}
+      {!isPlanOnly && selectedHubRoomId && hubView === "floorPlan" && (() => {
         const selectedRoom = analysis.rooms.find((r) => r.id === selectedHubRoomId);
         const roomResult = rooms.find((r) => r.roomId === selectedHubRoomId);
         const isGenerating = generatingRoomIds.has(selectedHubRoomId);
@@ -4027,7 +4212,7 @@ function ProjectRoomReviewStep({
   const [syncText, setSyncText] = useState("");
   const [editPanelPos, setEditPanelPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const editPanelDragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
-  const { generateRoom: streamGenerateRoom } = useProjectSSE();
+  const { generateRoom: streamGenerateRoom, generateFurnishedPlan: streamGenerateFurnishedPlan } = useProjectSSE();
   const tokenBalance = useConsumerDesignStore((s) => s.tokenBalance);
   const setTokenBalance = useConsumerDesignStore((s) => s.setTokenBalance);
   const currentRoom = rooms[currentRoomIndex];
@@ -5252,6 +5437,9 @@ function ProjectCompleteStep({
   setLightboxSrc: (src: string | null) => void;
 }) {
   const { t } = useTranslation();
+  const furnishedPlanRender = useConsumerDesignStore((s) => s.projectFurnishedPlanRender);
+  const roomRenders = rooms.filter((r) => r.renders.length > 0);
+  const hasFurnishedPlan = !!furnishedPlanRender?.base64;
 
   return (
     <div className="flex flex-col items-center gap-6">
@@ -5265,8 +5453,29 @@ function ProjectCompleteStep({
         })}
       </p>
 
+      {hasFurnishedPlan && (
+        <div className="w-full max-w-2xl">
+          <p className="text-sm font-semibold text-center mb-2">{t("project.decoratedPlanTitle")}</p>
+          <div
+            className="rounded-xl overflow-hidden border border-[var(--border)] cursor-pointer hover:shadow-md transition-shadow"
+            onClick={() =>
+              setLightboxSrc(
+                `data:${furnishedPlanRender!.mimeType};base64,${furnishedPlanRender!.base64}`,
+              )
+            }
+          >
+            <img
+              src={`data:${furnishedPlanRender!.mimeType};base64,${furnishedPlanRender!.base64}`}
+              alt={t("project.decoratedPlanTitle")}
+              className="w-full object-contain bg-[var(--muted)]"
+            />
+          </div>
+        </div>
+      )}
+
+      {roomRenders.length > 0 && (
       <div className="grid grid-cols-3 gap-3 w-full">
-        {rooms.filter((r) => r.renders.length > 0).map((r) => (
+        {roomRenders.map((r) => (
           <div
             key={r.roomId}
             className="rounded-xl overflow-hidden border border-[var(--border)] cursor-pointer hover:shadow-md transition-shadow"
@@ -5281,6 +5490,7 @@ function ProjectCompleteStep({
           </div>
         ))}
       </div>
+      )}
 
       <div className="flex gap-3 w-full flex-wrap">
         {hasPdf && projectId && (

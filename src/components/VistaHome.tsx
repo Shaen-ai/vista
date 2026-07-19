@@ -91,7 +91,7 @@ const GenerationDebugPanel = dynamic(
   { ssr: false },
 );
 import { isArmeniaLocalScrapedExclusive } from "@/lib/scrapedAllowlist";
-import { analyzeAndRedesign, runPhasedGeneration } from "@/lib/analyzeAndRedesign";
+import { analyzeAndRedesign, runPhasedGeneration, runQuickRoomRender } from "@/lib/analyzeAndRedesign";
 import { QuickRoomResultOverlay } from "@/components/QuickRoomResultOverlay";
 import type { QuickRoomLoaderPhase } from "@/components/QuickRoomGenerationLoader";
 import type { GenerationClientTrace } from "@/lib/generationDebug";
@@ -157,7 +157,16 @@ type GeneratePhase = "idle" | "analysing" | "designing" | "generating";
 
 function resolveGeneratePhase(msg: string): GeneratePhase {
   if (msg.includes("Analysing")) return "analysing";
-  if (msg.includes("Designing") || msg.includes("Preparing")) return "designing";
+  if (msg.includes("Locking room structure") || msg.includes("Removing the marked")) {
+    return "designing";
+  }
+  if (
+    msg.includes("Rendering")
+    || msg.includes("Preparing")
+    || msg.includes("Applying")
+  ) {
+    return "generating";
+  }
   return "generating";
 }
 
@@ -1767,7 +1776,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     }
 
     setIsGenerating(true);
-    setGeneratePhase("generating");
+    setGeneratePhase(opts?.galleryEdit ? "generating" : "analysing");
     setError(null);
     setGenerationDebug(null);
     if (!opts?.galleryEdit) {
@@ -1917,24 +1926,33 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       };
 
       const { authHeaders } = authContextForApi();
+      const generationResult = opts?.galleryEdit
+        ? await analyzeAndRedesign({
+            onPhase: (msg) => setGeneratePhase(resolveGeneratePhase(msg)),
+            roomImageBlob: roomBlob ?? null,
+            buildGenerateFormData,
+            skipGeometry: opts?.keepRoomShape,
+            preloadedGeometry: opts?.keepRoomShape
+              ? { geometry: lastRoomGeometry, failed: lastGeometryExtractionFailed }
+              : undefined,
+            tokenAction,
+            requestHeaders: authHeaders,
+            onDebug: setGenerationDebug,
+          })
+        : await runQuickRoomRender({
+            onPhase: (msg) => setGeneratePhase(resolveGeneratePhase(msg)),
+            buildGenerateFormData,
+            tokenAction,
+            requestHeaders: authHeaders,
+            onDebug: setGenerationDebug,
+          });
       const {
         geometry: returnedGeometry,
         geometryExtractionFailed: returnedGeoFailed,
         json: jsonUnknown,
         res,
         debug,
-      } = await analyzeAndRedesign({
-        onPhase: (msg) => setGeneratePhase(resolveGeneratePhase(msg)),
-        roomImageBlob: roomBlob ?? null,
-        buildGenerateFormData,
-        skipGeometry: opts?.keepRoomShape,
-        preloadedGeometry: opts?.keepRoomShape
-          ? { geometry: lastRoomGeometry, failed: lastGeometryExtractionFailed }
-          : undefined,
-        tokenAction,
-        requestHeaders: authHeaders,
-        onDebug: setGenerationDebug,
-      });
+      } = generationResult;
       setGenerationDebug(debug);
       const json = jsonUnknown as GenerateJson;
 
@@ -2248,18 +2266,12 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       return;
     }
 
-    if (designMode === "custom") {
-      setQuickRoomView("result");
-      setError(null);
-      void handleGenerate({ tokenAction: "generate" });
-    } else {
-      void handleStartPhasedDesign();
-    }
+    setQuickRoomView("result");
+    setError(null);
+    void handleGenerate({ tokenAction: "generate" });
   }, [
-    designMode,
     generateFormReady,
     handleGenerate,
-    handleStartPhasedDesign,
     insufficientTokensForGenerate,
     isGenerating,
   ]);
@@ -2803,7 +2815,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const showFinalResultInline = showFinalResult && designMode !== "custom";
   const showCustomResultOverlay = designMode === "custom" && quickRoomView === "result";
   const customResultLoading = showCustomResultOverlay && isGenerating && !generatedImageBase64;
-  const quickRoomLoaderPhase = (generatePhase ?? "analysing") as QuickRoomLoaderPhase;
+  const quickRoomLoaderPhase = (generatePhase === "idle" ? "analysing" : generatePhase) as QuickRoomLoaderPhase;
 
   const handleDownloadGenerated = useCallback(() => {
     if (!generatedImageBase64 || !generatedImageMimeType) return;
@@ -3837,8 +3849,13 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               <div className="w-full flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-3">
                   <span className="cd-field-label">{t("page.shapeCreativityLabel")}</span>
-                  <span className="text-xs text-[var(--muted-foreground)] tabular-nums">
+                  <span className="text-xs text-[var(--muted-foreground)] tabular-nums flex items-center gap-1.5">
                     {shapeCreativity}
+                    {shapeCreativity === 5 && (
+                      <span className="font-normal opacity-80">
+                        ({t("page.shapeCreativityRecommended")})
+                      </span>
+                    )}
                   </span>
                 </div>
                 <input

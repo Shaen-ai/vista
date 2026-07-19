@@ -15,6 +15,16 @@ import type { TokenAction } from "@/lib/vistaTokens";
 import type { DesignPhase } from "@/lib/phaseRouter";
 import type { ProductPurchaseLink } from "@/app/store";
 import { dispatchSpendUpdate, extractSpendPayload } from "@/lib/devSpendClient";
+import {
+  QUICK_ROOM_COSMETIC_ANALYSE_MS,
+  createQuickRoomLoaderPhaseGate,
+  sleepMs,
+} from "@/lib/quickRoom/quickRoomLoaderTiming";
+
+export {
+  QUICK_ROOM_COSMETIC_ANALYSE_MS,
+  QUICK_ROOM_COSMETIC_ANALYSE_MESSAGE,
+} from "@/lib/quickRoom/quickRoomLoaderTiming";
 
 /**
  * Client orchestrator: POST room-geometry, then POST generate with optional `roomGeometry`
@@ -391,6 +401,143 @@ export async function analyzeAndRedesign(options: {
   const debug = publishDebug();
   logGenerationClientTrace(debug);
   return { geometry, geometryExtractionFailed, ...renderResult, debug };
+}
+
+export type QuickRoomRenderResult = {
+  geometry: RoomGeometry | null;
+  geometryExtractionFailed: boolean;
+  res: Response;
+  json: { error?: string; data?: unknown; balance?: number; required?: number; debug?: unknown };
+  rawBody: string;
+  debug: GenerationClientTrace;
+};
+
+/**
+ * Quick Room custom mode: FAL-only render (staging shell + nano-banana edit).
+ * Skips room-geometry and Claude brief — the server builds a stub session from form fields.
+ */
+export async function runQuickRoomRender(options: {
+  onPhase?: (message: string) => void;
+  onDebug?: (trace: GenerationClientTrace) => void;
+  buildGenerateFormData: () => FormData | Promise<FormData>;
+  tokenAction?: TokenAction;
+  requestHeaders?: Record<string, string>;
+  /** Override cosmetic analyse duration (tests). */
+  cosmeticAnalyseMs?: number;
+}): Promise<QuickRoomRenderResult> {
+  const {
+    onPhase,
+    onDebug,
+    buildGenerateFormData,
+    tokenAction = "generate",
+    requestHeaders = {},
+    cosmeticAnalyseMs = QUICK_ROOM_COSMETIC_ANALYSE_MS,
+  } = options;
+
+  const traceStartedAt = Date.now();
+  const phaseTraces: GenerationClientPhaseTrace[] = [];
+
+  function publishDebug(): GenerationClientTrace {
+    const trace = mergeGenerationClientTrace(traceStartedAt, phaseTraces);
+    onDebug?.(trace);
+    return trace;
+  }
+
+  const phaseGate = createQuickRoomLoaderPhaseGate(onPhase);
+  phaseGate.emitCosmeticAnalyse();
+
+  const startedAt = Date.now();
+
+  const fetchPromise = (async () => {
+    const form = await Promise.resolve(buildGenerateFormData());
+    form.set("tokenAction", tokenAction);
+    form.set("phase", "render");
+    form.set("designMode", "custom");
+    return fetch("/api/interior-design/generate/stream", {
+      method: "POST",
+      body: form,
+      headers: requestHeaders,
+    });
+  })();
+
+  const [, res] = await Promise.all([
+    sleepMs(cosmeticAnalyseMs).then(() => phaseGate.openGate()),
+    fetchPromise,
+  ]);
+
+  if (!res.ok) {
+    const rawBody = await res.text();
+    throwIfCloudflareChallenge(res, rawBody);
+    let json: { error?: string; balance?: number; required?: number; debug?: unknown } = {};
+    try {
+      json = JSON.parse(rawBody) as typeof json;
+    } catch { /* fall through */ }
+    phaseTraces.push({
+      name: "generate-render",
+      ms: Date.now() - startedAt,
+      httpStatus: res.status,
+      error: formatApiErrorMessage(json.error, "Render failed."),
+      server: extractGenerationDebug(json),
+    });
+    const debug = publishDebug();
+    logGenerationClientTrace(debug);
+    return { geometry: null, geometryExtractionFailed: false, res, json, rawBody, debug };
+  }
+
+  try {
+    const last = await consumeSSE(res, (event) => {
+      if (event.phase === "generating" && event.message) {
+        phaseGate.gatedEmit(event.message);
+      }
+    });
+    if (!last?.data) {
+      throw new Error("Render stream did not complete. Please try again.");
+    }
+    const json = last.data as {
+      error?: string;
+      data?: unknown;
+      balance?: number;
+      required?: number;
+      debug?: unknown;
+    };
+    phaseTraces.push({
+      name: "generate-render",
+      ms: Date.now() - startedAt,
+      httpStatus: res.status,
+      server: extractGenerationDebug(json),
+    });
+    publishDebug();
+    const spend = extractSpendPayload(json);
+    if (spend) dispatchSpendUpdate(spend);
+
+    const renderData = json.data as { images?: Array<{ base64?: string }> } | undefined;
+    if (!json.error && !renderData?.images?.[0]?.base64) {
+      throw new Error("Render step completed but returned no image. Please try again.");
+    }
+
+    const debug = publishDebug();
+    logGenerationClientTrace(debug);
+    return {
+      geometry: null,
+      geometryExtractionFailed: false,
+      res,
+      json,
+      rawBody: JSON.stringify(last.data),
+      debug,
+    };
+  } catch (err) {
+    if (phaseTraces.every((p) => p.name !== "generate-render")) {
+      phaseTraces.push({
+        name: "generate-render",
+        ms: Date.now() - startedAt,
+        httpStatus: res.status,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const debug = publishDebug();
+    logGenerationClientTrace(debug);
+    throw err;
+  }
 }
 
 export interface PhasedGenerationResult {

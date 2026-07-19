@@ -30,16 +30,17 @@ test("resolveShapeCreativity level 0 — shell 1.5 veryStrong", () => {
   assert.equal(cfg.creativeMode, "none");
 });
 
-test("resolveShapeCreativity level 5 — shell 1.0 strong", () => {
+test("resolveShapeCreativity level 5 — tuned default sweet spot", () => {
   const cfg = resolveShapeCreativity(5);
-  assert.equal(cfg.loraScale, 1.0);
-  assert.equal(cfg.preserveMode, "strong");
+  assert.equal(cfg.loraScale, 1.2);
+  assert.equal(cfg.preserveMode, "veryStrong");
   assert.equal(cfg.creativeMode, "none");
+  assert.equal(cfg.runShell, true);
 });
 
-test("resolveShapeCreativity level 8 — shell 0.7 soft", () => {
+test("resolveShapeCreativity level 8 — shell 0.85 soft", () => {
   const cfg = resolveShapeCreativity(8);
-  assert.equal(cfg.loraScale, 0.7);
+  assert.equal(cfg.loraScale, 0.85);
   assert.equal(cfg.preserveMode, "soft");
 });
 
@@ -55,4 +56,12 @@ test("resolveShapeCreativity level 10 — no shell moreCreative", () => {
   const cfg = resolveShapeCreativity(10);
   assert.equal(cfg.runShell, false);
   assert.equal(cfg.creativeMode, "moreCreative");
+});
+
+test("loraScale decreases monotonically from 0 through 8", () => {
+  const l0 = resolveShapeCreativity(0).loraScale!;
+  const l5 = resolveShapeCreativity(5).loraScale!;
+  const l8 = resolveShapeCreativity(8).loraScale!;
+  assert.ok(l0 > l5);
+  assert.ok(l5 > l8);
 });

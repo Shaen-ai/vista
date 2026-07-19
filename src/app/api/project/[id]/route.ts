@@ -31,6 +31,17 @@ export async function GET(
   const finalizeStatus = getProjectFinalizeStatus(state);
 
   if (previewOnly) {
+    if (state.furnishedPlanRender?.base64) {
+      return NextResponse.json({
+        data: {
+          preview: {
+            roomId: null,
+            base64: state.furnishedPlanRender.base64,
+            mimeType: state.furnishedPlanRender.mimeType,
+          },
+        },
+      });
+    }
     for (const room of state.rooms) {
       for (const render of room.renders) {
         if (render.base64) {
@@ -147,6 +158,11 @@ export async function GET(
             mimeType: u.mimeType,
             label: u.label,
           })),
+      furnishedPlanRender: statusOnly
+        ? undefined
+        : state.furnishedPlanRender ?? null,
+      furnishedPlanStatus: statusOnly ? undefined : state.furnishedPlanStatus ?? null,
+      furnishedPlanError: statusOnly ? undefined : state.furnishedPlanError ?? null,
       uploadedPhotos: statusOnly
         ? undefined
         : state.uploadedPhotos.map((p) => ({
