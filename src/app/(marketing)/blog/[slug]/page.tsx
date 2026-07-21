@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getBlogPost, getBlogPosts } from "@/lib/blog";
 import { VISTA_SITE_URL } from "@/lib/siteUrl";
+import { JsonLdScript } from "@/components/marketing/JsonLdScript";
+import { buildBlogPostingJsonLd } from "@/lib/jsonLd";
 
 interface Props {
   params: Promise<{ slug: string }>;
@@ -49,6 +51,14 @@ export default async function BlogPostPage({ params }: Props) {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-16 sm:px-6 sm:py-24">
+      <JsonLdScript
+        data={buildBlogPostingJsonLd({
+          title: post.title,
+          description: post.description,
+          date: post.date,
+          slug: post.slug,
+        })}
+      />
       <Link
         href="/blog"
         className="text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)]"

@@ -838,9 +838,9 @@
     "version": "ձև",
     "versions": "ձևեր",
     "draft": "Սևագիր",
-    "minutesAgo": "{count}ր առաջ",
-    "hoursAgo": "{count}ժ առաջ",
-    "daysAgo": "{count}օ առաջ"
+    "minutesAgo": "{count}րոպե առաջ",
+    "hoursAgo": "{count}ժամ առաջ",
+    "daysAgo": "{count}օր առաջ"
   },
   "landing": {
     "stepLabel": "ԲԱԺԻՆ 01 / ԸՆՏՐԵՔ ՌԵԺԻՄ",

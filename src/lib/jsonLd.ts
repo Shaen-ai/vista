@@ -2,7 +2,7 @@ import { VISTA_SITE_URL } from "@/lib/siteUrl";
 
 export interface JsonLdWebApplication {
   "@context": "https://schema.org";
-  "@type": "WebApplication";
+  "@type": "SoftwareApplication";
   name: string;
   url: string;
   description: string;
@@ -21,6 +21,7 @@ export interface JsonLdOrganization {
   "@type": "Organization";
   name: string;
   url: string;
+  logo: string;
   sameAs: string[];
 }
 
@@ -40,7 +41,7 @@ export interface JsonLdFaqPage {
 export function buildWebApplicationJsonLd(): JsonLdWebApplication {
   return {
     "@context": "https://schema.org",
-    "@type": "WebApplication",
+    "@type": "SoftwareApplication",
     name: "Vista",
     url: VISTA_SITE_URL,
     description:
@@ -62,7 +63,29 @@ export function buildOrganizationJsonLd(): JsonLdOrganization {
     "@type": "Organization",
     name: "Tunzone",
     url: "https://tunzone.com",
+    logo: "https://tunzone.com/logo.png",
     sameAs: ["https://tunzone.com/about"],
+  };
+}
+
+export function buildBlogPostingJsonLd(post: {
+  title: string;
+  description: string;
+  date: string;
+  slug: string;
+}): object {
+  const url = `${VISTA_SITE_URL}/blog/${post.slug}`;
+  return {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    headline: post.title,
+    description: post.description,
+    datePublished: post.date,
+    dateModified: post.date,
+    mainEntityOfPage: { "@type": "WebPage", "@id": url },
+    url,
+    author: buildOrganizationJsonLd(),
+    publisher: buildOrganizationJsonLd(),
   };
 }
 
