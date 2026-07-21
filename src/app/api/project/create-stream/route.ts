@@ -17,6 +17,7 @@ import {
 } from "@/lib/aiIncident";
 import { createSseEmitter, isStreamClosedError } from "@/lib/sseStream";
 import { withRequestUploadUser } from "@/lib/uploadUserContext";
+import { FLOOR_PLAN_IMAGE_REQUIRED_CODE } from "@/lib/floorPlanImageError";
 
 export const maxDuration = 900;
 
@@ -77,6 +78,15 @@ export async function POST(request: NextRequest) {
       const { emit: send, close } = createSseEmitter(controller, { heartbeatMs: 10_000 });
 
       try {
+        if (!mimeType.toLowerCase().startsWith("image/")) {
+          send({
+            phase: "error",
+            message: "Floor plan must be an image file (JPG, PNG, or WEBP).",
+            code: FLOOR_PLAN_IMAGE_REQUIRED_CODE,
+          });
+          return;
+        }
+
         pipelineLog("UPLOAD", "create-stream analysis source", { source: analysisSource });
         await initializeSpatialAnalysis(
           {

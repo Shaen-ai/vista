@@ -1,5 +1,9 @@
 import type { ProgressEvent } from "@/lib/project/types";
 import { AiServiceUnavailableError, isAiServiceUnavailableCode } from "@/lib/aiServiceError";
+import {
+  FloorPlanImageRequiredError,
+  isFloorPlanImageRequiredCode,
+} from "@/lib/floorPlanImageError";
 import { sanitizeUserFacingMessage } from "@/lib/userFacingMessages";
 
 export function parseSsePart(
@@ -22,6 +26,9 @@ export function parseSsePart(
     if (event.phase === "error") {
       if (isAiServiceUnavailableCode(event.code)) {
         throw new AiServiceUnavailableError(event.message || "Operation failed");
+      }
+      if (isFloorPlanImageRequiredCode(event.code)) {
+        throw new FloorPlanImageRequiredError(event.message || undefined);
       }
       throw new Error(event.message || "Operation failed");
     }

@@ -6,6 +6,13 @@
 import type { RoomAnalysis } from "@/lib/interiorDesignPrompts";
 import type { MasterDesignConcept, UserPreferences } from "@/lib/project/types";
 import { getServerMarketplaceApiBaseUrl } from "@/lib/publicEnv";
+import {
+  hasLocalProductCatalog,
+  normalizeCountryCode,
+  normalizeSearchMode,
+} from "@/lib/catalogCountryCapabilities";
+
+export { normalizeCountryCode, normalizeSearchMode };
 
 /** Max scraped rows for full-project flows. */
 export const SCRAPED_ALLOWLIST_CAP = 88;
@@ -57,32 +64,11 @@ export function marketplaceSearchRowsFromJson(json: unknown): Record<string, unk
   return [];
 }
 
-export function normalizeCountryCode(code: string): string {
-  return (code || "").trim().toUpperCase();
-}
-
-/** UI label "տեղական" and common aliases → canonical `local` search mode. */
-const LOCAL_SEARCH_MODE_ALIASES = new Set([
-  "local",
-  "տեղական",
-  "teghakan",
-  "locale",
-]);
-
-export function normalizeSearchMode(mode: string): string {
-  const raw = (mode || "").trim();
-  const lower = raw.toLowerCase();
-  if (LOCAL_SEARCH_MODE_ALIASES.has(lower) || LOCAL_SEARCH_MODE_ALIASES.has(raw)) {
-    return "local";
-  }
-  return lower;
-}
-
 /**
- * Armenia + Local (տեղական): generations must use scraped_products from our DB only.
+ * Local scraped catalog mode: generations must use scraped_products from our DB only.
  */
 export function isArmeniaLocalScrapedExclusive(countryCode: string, searchMode: string): boolean {
-  return normalizeCountryCode(countryCode) === "AM" && normalizeSearchMode(searchMode) === "local";
+  return hasLocalProductCatalog(countryCode, searchMode);
 }
 
 /** Stable API error code when Local mode has no marketplace rows to allowlist. */

@@ -251,6 +251,12 @@ import { inspirationProductsToPatchPayload } from "@/lib/inspirationPersistence"
 import { useConsumerDesignStore } from "./store";
 import { useProjectSSE, cancelActiveRoomGeneration } from "@/lib/project/useProjectSSE";
 import { handleAiServiceUnavailableClientError } from "@/lib/aiServiceError";
+import {
+  isFloorPlanImageMime,
+  isFloorPlanImageRequiredError,
+} from "@/lib/floorPlanImageError";
+import { hasLocalProductCatalog } from "@/lib/catalogCountryCapabilities";
+import { FloorPlanFormatModal } from "@/components/FloorPlanFormatModal";
 import FloorPlanHub, { roomHubStatusLabel } from "@/components/project/FloorPlanHub";
 import FloorPlanEditor from "@/components/project/FloorPlanEditor";
 import { ProjectFinalizeCard } from "@/components/project/ProjectFinalizeCard";
@@ -644,6 +650,7 @@ function ProjectUploadStep({
   const [isDragging, setIsDragging] = useState(false);
   const [cameraTarget, setCameraTarget] = useState<"floorPlan" | "room" | null>(null);
   const [structuralEditPhotoId, setStructuralEditPhotoId] = useState<string | null>(null);
+  const [floorPlanFormatModalOpen, setFloorPlanFormatModalOpen] = useState(false);
 
   // Optional manual floor-plan drawing (seeds the analysis when the user draws rooms).
   // Persisted in the store so it survives navigating forward and back (and page reloads).
@@ -678,6 +685,11 @@ function ProjectUploadStep({
 
   const handleAnalyze = useCallback(async () => {
     if (!floorPlanBase64 || !floorPlanMimeType) return;
+    if (!isFloorPlanImageMime(floorPlanMimeType)) {
+      setFloorPlanFormatModalOpen(true);
+      setProjectStep("upload");
+      return;
+    }
 
     const drawn = draftRooms.filter((r) => (r.polygon?.length ?? 0) >= 3);
     if (drawn.length > 0) {
@@ -793,6 +805,10 @@ function ProjectUploadStep({
       if (handleAiServiceUnavailableClientError(err, onAiServiceUnavailable)) {
         setProjectError(null);
         setProjectStep("upload");
+      } else if (isFloorPlanImageRequiredError(err)) {
+        setProjectError(null);
+        setProjectStep("upload");
+        setFloorPlanFormatModalOpen(true);
       } else {
         setProjectError(userFacingError(err, t("common.error")));
         setProjectStep("analyzingFloorPlan");
@@ -823,48 +839,36 @@ function ProjectUploadStep({
 
   const handleFloorPlanFile = useCallback(
     async (file: File) => {
-      const isImage = file.type.startsWith("image/");
-      const isPdf = file.type === "application/pdf";
-      if (!isImage && !isPdf) return;
+      if (!file.type.startsWith("image/")) {
+        setFloorPlanFormatModalOpen(true);
+        return;
+      }
       // STEP 1 — user picked a floor-plan file.
       pipelineLog("UPLOAD", "floor plan selected", {
         fileName: file.name,
-        type: isImage ? "image" : "pdf",
+        type: "image",
         sizeKB: Math.round(file.size / 1024),
       });
       userFlowLog(1, "floor plan uploaded", {
         fileName: file.name,
-        type: isImage ? "image" : "pdf",
+        type: "image",
         sizeKB: Math.round(file.size / 1024),
       });
       try {
-        if (isImage) {
-          // Normalize to JPEG so Claude always gets a supported image type
-          // (fixes HEIC / oversized plans). Floor plans keep a higher
-          // resolution/quality than room photos: door swing arcs and window
-          // lines are thin features that the 1200px photo default blurs away,
-          // which makes opening detection miss them.
-          const { base64, mimeType } = await compressImageFile(file, { maxEdge: 2200, quality: 0.92 });
-          setFloorPlan(base64, mimeType);
-        } else {
-          // PDF: keep as-is; analyzed server-side via a document block.
-          const dataUrl = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = () => reject(new Error("Failed to read file"));
-            reader.readAsDataURL(file);
-          });
-          const [meta, base64] = dataUrl.split(",");
-          const mime = meta?.match(/:(.*?);/)?.[1] ?? "application/pdf";
-          setFloorPlan(base64!, mime);
-        }
+        // Normalize to JPEG so Claude always gets a supported image type
+        // (fixes HEIC / oversized plans). Floor plans keep a higher
+        // resolution/quality than room photos: door swing arcs and window
+        // lines are thin features that the 1200px photo default blurs away,
+        // which makes opening detection miss them.
+        const { base64, mimeType } = await compressImageFile(file, { maxEdge: 2200, quality: 0.92 });
+        setFloorPlan(base64, mimeType);
         // Manual trace is optional — AI auto-detect runs on the raw upload by default.
         if (draftRooms.length === 0) setShowDraw(false);
       } catch {
         setProjectError(t("project.floorPlanReadError"));
       }
     },
-    [setFloorPlan, setProjectError, t],
+    [draftRooms.length, setFloorPlan, setProjectError, t],
   );
 
   const handleRoomPhotoFiles = useCallback((files: FileList | File[]) => {
@@ -955,7 +959,7 @@ function ProjectUploadStep({
             <input
               ref={floorPlanRef}
               type="file"
-              accept="image/*,.pdf"
+              accept="image/*"
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) void handleFloorPlanFile(f);
@@ -1240,6 +1244,11 @@ function ProjectUploadStep({
         open={cameraTarget !== null}
         onClose={() => setCameraTarget(null)}
         onCapture={handleWebCameraCapture}
+      />
+
+      <FloorPlanFormatModal
+        open={floorPlanFormatModalOpen}
+        onClose={() => setFloorPlanFormatModalOpen(false)}
       />
     </div>
   );
@@ -4220,6 +4229,13 @@ function ProjectRoomReviewStep({
     resolveDesignMode(s.projectPreferences.designMode),
   );
   const isCustom = isCustomDesignMode(designMode);
+  const catalogCountryCode = useConsumerDesignStore(
+    (s) => s.projectPreferences.countryCode ?? s.selectedCountry,
+  );
+  const catalogSearchMode = useConsumerDesignStore(
+    (s) => s.projectPreferences.searchMode ?? s.searchMode,
+  );
+  const catalogAvailable = hasLocalProductCatalog(catalogCountryCode, catalogSearchMode);
   const suggestedOrder = useConsumerDesignStore((s) => s.projectSuggestedRoomOrder);
   const hasPdf = useConsumerDesignStore((s) => s.hasPdf);
   const roomIds = getFinalizeRequiredRoomIds(analysis, concept, suggestedOrder, rooms);
@@ -4845,7 +4861,7 @@ function ProjectRoomReviewStep({
             </div>
           )}
 
-          {(currentRoom.usedScrapedProducts ?? []).length > 0 && (
+          {catalogAvailable && (currentRoom.usedScrapedProducts ?? []).length > 0 && (
             <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 p-4">
               <p className="text-xs font-semibold flex items-center gap-2 text-[var(--foreground)] mb-3">
                 <Package size={14} />
@@ -5236,7 +5252,7 @@ function ProjectRoomReviewStep({
             />
           )}
 
-          {activeState.productLinks.length > 0 && (
+          {catalogAvailable && activeState.productLinks.length > 0 && (
             <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 p-4">
               <p className="text-xs font-semibold flex items-center gap-2 text-[var(--foreground)] mb-3">
                 <Package size={14} />

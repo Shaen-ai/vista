@@ -91,6 +91,7 @@ const GenerationDebugPanel = dynamic(
   { ssr: false },
 );
 import { isArmeniaLocalScrapedExclusive } from "@/lib/scrapedAllowlist";
+import { hasLocalProductCatalog } from "@/lib/catalogCountryCapabilities";
 import { analyzeAndRedesign, runPhasedGeneration, runQuickRoomRender } from "@/lib/analyzeAndRedesign";
 import { QuickRoomResultOverlay } from "@/components/QuickRoomResultOverlay";
 import type { QuickRoomLoaderPhase } from "@/components/QuickRoomGenerationLoader";
@@ -1171,8 +1172,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const prevSelectedCountRef = useRef(0);
   const sidebarPreloadedRef = useRef(false);
   const isWorkspace = variant !== "landing";
-  /** Catalog sidebar search/preload runs only in Quick Room — not Full Project. */
-  const catalogSidebarEnabled = variant === "quick-workspace";
+  const catalogAvailable = hasLocalProductCatalog(selectedCountry, searchMode);
+  /** Catalog sidebar search/preload runs only in Quick Room when a local catalog exists. */
+  const catalogSidebarEnabled = variant === "quick-workspace" && catalogAvailable;
   const [showLanding, setShowLanding] = useState(variant === "landing");
   const { restoring: restoringProjectSession } = useProjectSessionRestore({
     skip: variant !== "project-workspace",
@@ -1654,6 +1656,16 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   );
 
   const amLocalExclusive = isArmeniaLocalScrapedExclusive(selectedCountry, searchMode);
+
+  useEffect(() => {
+    if (catalogAvailable) return;
+    const store = useConsumerDesignStore.getState();
+    if (store.selectedProducts.length > 0) {
+      useConsumerDesignStore.setState({ selectedProducts: [] });
+    }
+    setAllProductsModalOpen(false);
+    setMobileTab("design");
+  }, [catalogAvailable, selectedCountry, searchMode]);
 
   const sidebarPreviewSections = useMemo(
     () => selectSidebarPreviewSections(searchResults),
@@ -3466,8 +3478,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       )}
 
       {!showLanding && (variant !== "project-workspace" && vistaMode !== "project" ? (
-      <div className={`cd-main-grid cd-main-grid--mobile-tabs flex-1 min-h-0 overflow-hidden ${isMobile ? "flex flex-col h-full" : "grid grid-cols-[minmax(240px,320px)_minmax(0,1fr)_minmax(240px,380px)]"}`}>
-        {isMobile && (
+      <div className={`cd-main-grid cd-main-grid--mobile-tabs flex-1 min-h-0 overflow-hidden ${isMobile ? "flex flex-col h-full" : catalogAvailable ? "grid grid-cols-[minmax(240px,320px)_minmax(0,1fr)_minmax(240px,380px)]" : "grid grid-cols-1"}`}>
+        {catalogAvailable && isMobile && (
           <div className="cd-mobile-tab-bar fixed bottom-0 left-0 right-0 z-50 flex border-t border-[var(--border)] bg-[var(--card)]" style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
             <button
               onClick={() => setMobileTab("search")}
@@ -3497,6 +3509,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
             </button>
           </div>
         )}
+        {catalogAvailable && (
         <aside className={`cd-sidebar flex flex-col flex-1 min-h-0 min-w-0 h-full border-r border-[var(--border)] bg-[var(--card)] overflow-hidden ${isMobile && mobileTab !== "search" ? "hidden" : ""} ${isMobile ? "pb-20" : ""}`}>
           {isMobile && (
             <div className="cd-panel-head">
@@ -3669,8 +3682,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
             )}
           </div>
         </aside>
+        )}
 
-        <main className={`flex flex-col min-h-0 min-w-0 overflow-y-auto custom-scrollbar ${isMobile && mobileTab !== "design" ? "hidden" : ""} ${isMobile ? "pb-20" : ""}`}>
+        <main className={`flex flex-col min-h-0 min-w-0 overflow-y-auto custom-scrollbar ${catalogAvailable && isMobile && mobileTab !== "design" ? "hidden" : ""} ${catalogAvailable && isMobile ? "pb-20" : ""}`}>
           <div className={`flex-1 flex flex-col items-center gap-6 max-w-2xl mx-auto w-full ${isMobile ? "p-4" : "p-6"}`}>
             {/* Mode step label */}
             <div className="cd-step-label w-full">
@@ -4285,6 +4299,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           </div>
         </main>
 
+        {catalogAvailable && (
         <aside className={`cd-sidebar cd-sidebar--selected flex flex-col flex-1 min-h-0 min-w-0 h-full border-l border-[var(--border)] bg-[var(--card)] overflow-hidden ${isMobile && mobileTab !== "selected" ? "hidden" : ""} ${isMobile ? "pb-20" : ""}`}>
           <div className="cd-panel-head">
             <h2 className="cd-panel-head-title">{t("page.selectedProducts")}</h2>
@@ -4339,6 +4354,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
             )}
           </div>
         </aside>
+        )}
       </div>
       ) : (
       <ProjectModeContent
@@ -4410,6 +4426,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       )}
       <LowBalancePrompt />
 
+      {catalogAvailable && (
       <AllProductsModal
         open={allProductsModalOpen}
         onClose={() => setAllProductsModalOpen(false)}
@@ -4420,6 +4437,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         onAddLive={handleAddLiveProduct}
         amLocalExclusive={amLocalExclusive}
       />
+      )}
 
       {/* Save Design modal */}
       {saveDesignModalOpen && (
