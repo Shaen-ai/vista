@@ -1225,6 +1225,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     }
   }, [variant]);
   const [landingSelectedMode, setLandingSelectedMode] = useState<"quick" | "project">("quick");
+  const [isOpeningMode, setIsOpeningMode] = useState<"quick" | "project" | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [editFeedback, setEditFeedback] = useState("");
   const [phaseEditFeedback, setPhaseEditFeedback] = useState("");
@@ -1284,6 +1285,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       void loadProjects();
     }
   }, [loadProjects]);
+
+  useEffect(() => {
+    if (variant !== "landing") return;
+    router.prefetch("/quick");
+    router.prefetch("/quick/new");
+    router.prefetch("/project");
+    router.prefetch("/project/new");
+  }, [variant, router]);
 
 
   const refreshTokenBalance = useCallback(async () => {
@@ -2987,24 +2996,30 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     e.target.value = "";
   }, []);
 
-  const handleSelectMode = (mode: "quick" | "project") => {
-    const hubMode = mode === "quick" ? "quick_room" : "project";
-    const hub = mode === "quick" ? "/quick" : "/project";
-    const workspace = mode === "quick" ? "/quick/new" : "/project/new";
-    // Navigate instantly using the already-loaded project list (a mount effect
-    // keeps `savedProjects` fresh in the background). Awaiting a network round-trip
-    // here froze the card on click; the destination route re-loads projects anyway.
-    const count = useConsumerDesignStore
-      .getState()
-      .savedProjects.filter((p) => p.mode === hubMode).length;
-    if (count === 0 && mode === "quick") {
-      useConsumerDesignStore.getState().resetQuickRoom();
-    }
-    router.push(count === 0 ? workspace : hub);
-    if (getAuthToken()) {
-      void loadProjects({ mode: hubMode });
-    }
-  };
+  const handleSelectMode = useCallback(
+    (mode: "quick" | "project") => {
+      if (isOpeningMode) return;
+      setIsOpeningMode(mode);
+      setLandingSelectedMode(mode);
+      const hubMode = mode === "quick" ? "quick_room" : "project";
+      const hub = mode === "quick" ? "/quick" : "/project";
+      const workspace = mode === "quick" ? "/quick/new" : "/project/new";
+      // Navigate instantly using the already-loaded project list (a mount effect
+      // keeps `savedProjects` fresh in the background). Awaiting a network round-trip
+      // here froze the card on click; the destination route re-loads projects anyway.
+      const count = useConsumerDesignStore
+        .getState()
+        .savedProjects.filter((p) => p.mode === hubMode).length;
+      if (count === 0 && mode === "quick") {
+        useConsumerDesignStore.getState().resetQuickRoom();
+      }
+      router.push(count === 0 ? workspace : hub);
+      if (getAuthToken()) {
+        void loadProjects({ mode: hubMode });
+      }
+    },
+    [isOpeningMode, loadProjects, router],
+  );
 
   if (variant === "project-workspace" && restoringProjectSession) {
     return (
@@ -3344,18 +3359,41 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
             </h2>
 
             {/* Mode toggle */}
-            <div className="cd-mode-toggle">
+            <div
+              className={`cd-mode-toggle${isOpeningMode ? " cd-mode-toggle--opening" : ""}`}
+              aria-live="polite"
+            >
               <button
-                className={`cd-mode-toggle-btn${landingSelectedMode === "quick" ? " cd-mode-toggle-btn--active" : ""}`}
-                onClick={() => setLandingSelectedMode("quick")}
+                type="button"
+                className={`cd-mode-toggle-btn${landingSelectedMode === "quick" ? " cd-mode-toggle-btn--active" : ""}${isOpeningMode === "quick" ? " cd-mode-toggle-btn--opening" : ""}`}
+                onClick={() => handleSelectMode("quick")}
+                disabled={!!isOpeningMode}
+                aria-busy={isOpeningMode === "quick"}
               >
-                {t("page.modeQuickRoom")}
+                {isOpeningMode === "quick" ? (
+                  <>
+                    <Loader2 size={14} className="cd-mode-entry-spinner animate-spin" aria-hidden />
+                    <span>{t("landing.openingMode")}</span>
+                  </>
+                ) : (
+                  t("page.modeQuickRoom")
+                )}
               </button>
               <button
-                className={`cd-mode-toggle-btn${landingSelectedMode === "project" ? " cd-mode-toggle-btn--active" : ""}`}
-                onClick={() => setLandingSelectedMode("project")}
+                type="button"
+                className={`cd-mode-toggle-btn${landingSelectedMode === "project" ? " cd-mode-toggle-btn--active" : ""}${isOpeningMode === "project" ? " cd-mode-toggle-btn--opening" : ""}`}
+                onClick={() => handleSelectMode("project")}
+                disabled={!!isOpeningMode}
+                aria-busy={isOpeningMode === "project"}
               >
-                {t("page.modeFullProject")}
+                {isOpeningMode === "project" ? (
+                  <>
+                    <Loader2 size={14} className="cd-mode-entry-spinner animate-spin" aria-hidden />
+                    <span>{t("landing.openingMode")}</span>
+                  </>
+                ) : (
+                  t("page.modeFullProject")
+                )}
               </button>
             </div>
 
@@ -3363,8 +3401,10 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
             <div className="cd-mode-list">
               <button
                 type="button"
-                className={`cd-mode-list-item${landingSelectedMode === "quick" ? " cd-mode-list-item--selected" : ""}`}
+                className={`cd-mode-list-item${landingSelectedMode === "quick" ? " cd-mode-list-item--selected" : ""}${isOpeningMode === "quick" ? " cd-mode-list-item--opening" : ""}`}
                 onClick={() => handleSelectMode("quick")}
+                disabled={!!isOpeningMode}
+                aria-busy={isOpeningMode === "quick"}
               >
                 <div className="cd-mode-list-thumb">
                   <img src={LANDING_MODE_IMAGES.quick} alt="" loading="eager" />
@@ -3377,12 +3417,18 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     <span className="cd-diamond-sm" />
                   </div>
                 </div>
-                <ChevronRight size={16} className="cd-mode-list-chevron" aria-hidden />
+                {isOpeningMode === "quick" ? (
+                  <Loader2 size={16} className="cd-mode-list-chevron cd-mode-entry-spinner animate-spin" aria-hidden />
+                ) : (
+                  <ChevronRight size={16} className="cd-mode-list-chevron" aria-hidden />
+                )}
               </button>
               <button
                 type="button"
-                className={`cd-mode-list-item${landingSelectedMode === "project" ? " cd-mode-list-item--selected" : ""}`}
+                className={`cd-mode-list-item${landingSelectedMode === "project" ? " cd-mode-list-item--selected" : ""}${isOpeningMode === "project" ? " cd-mode-list-item--opening" : ""}`}
                 onClick={() => handleSelectMode("project")}
+                disabled={!!isOpeningMode}
+                aria-busy={isOpeningMode === "project"}
               >
                 <div className="cd-mode-list-thumb">
                   <img src={LANDING_MODE_IMAGES.project} alt="" loading="eager" />
@@ -3395,7 +3441,11 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     <span className="cd-diamond-sm" />
                   </div>
                 </div>
-                <ChevronRight size={16} className="cd-mode-list-chevron" aria-hidden />
+                {isOpeningMode === "project" ? (
+                  <Loader2 size={16} className="cd-mode-list-chevron cd-mode-entry-spinner animate-spin" aria-hidden />
+                ) : (
+                  <ChevronRight size={16} className="cd-mode-list-chevron" aria-hidden />
+                )}
               </button>
             </div>
 
@@ -3403,11 +3453,13 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
             <div className="cd-mode-cards">
               {/* Quick Room card */}
               <div
-                className={`cd-mode-card${landingSelectedMode === "quick" ? " cd-mode-card--selected" : ""}`}
-                onClick={() => handleSelectMode("quick")}
+                className={`cd-mode-card${landingSelectedMode === "quick" ? " cd-mode-card--selected" : ""}${isOpeningMode === "quick" ? " cd-mode-card--opening" : ""}${isOpeningMode && isOpeningMode !== "quick" ? " cd-mode-card--disabled" : ""}`}
+                onClick={() => !isOpeningMode && handleSelectMode("quick")}
                 role="button"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === "Enter" && handleSelectMode("quick")}
+                tabIndex={isOpeningMode ? -1 : 0}
+                aria-busy={isOpeningMode === "quick"}
+                aria-disabled={!!isOpeningMode}
+                onKeyDown={(e) => e.key === "Enter" && !isOpeningMode && handleSelectMode("quick")}
               >
                 <div className="cd-mode-card-photo">
                   <img
@@ -3434,15 +3486,22 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     </span>
                   </div>
                 </div>
+                {isOpeningMode === "quick" && (
+                  <div className="cd-mode-card-opening" aria-hidden>
+                    <Loader2 size={28} className="cd-mode-entry-spinner animate-spin" />
+                  </div>
+                )}
               </div>
 
               {/* Full Project card */}
               <div
-                className={`cd-mode-card${landingSelectedMode === "project" ? " cd-mode-card--selected" : ""}`}
-                onClick={() => handleSelectMode("project")}
+                className={`cd-mode-card${landingSelectedMode === "project" ? " cd-mode-card--selected" : ""}${isOpeningMode === "project" ? " cd-mode-card--opening" : ""}${isOpeningMode && isOpeningMode !== "project" ? " cd-mode-card--disabled" : ""}`}
+                onClick={() => !isOpeningMode && handleSelectMode("project")}
                 role="button"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === "Enter" && handleSelectMode("project")}
+                tabIndex={isOpeningMode ? -1 : 0}
+                aria-busy={isOpeningMode === "project"}
+                aria-disabled={!!isOpeningMode}
+                onKeyDown={(e) => e.key === "Enter" && !isOpeningMode && handleSelectMode("project")}
               >
                 <div className="cd-mode-card-photo" style={{ background: "linear-gradient(135deg, #b8a898 0%, #9c8878 40%, #7e6858 100%)" }}>
                   <img
@@ -3470,6 +3529,11 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     <span className="cd-mode-card-stat">{t("landing.projectCardMeta")}</span>
                   </div>
                 </div>
+                {isOpeningMode === "project" && (
+                  <div className="cd-mode-card-opening" aria-hidden>
+                    <Loader2 size={28} className="cd-mode-entry-spinner animate-spin" />
+                  </div>
+                )}
               </div>
             </div>
               </>

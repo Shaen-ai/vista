@@ -39,6 +39,7 @@ Vista is a consumer AI interior design app. Users upload a photo of their room, 
 
 - Homepage: https://vista.tunzone.com
 - Features: https://vista.tunzone.com/features
+- For designers: https://vista.tunzone.com/for-designers
 - FAQ: https://vista.tunzone.com/faq
 - About: https://vista.tunzone.com/about
 - Blog: https://vista.tunzone.com/blog

@@ -887,7 +887,8 @@
     "projectCardTitle": "Whole apartment.",
     "projectCardDesc": "All rooms as one complete interior — furniture and finishes for every room at once.",
     "projectCardPrice": "from 40",
-    "projectCardMeta": "5+ rooms"
+    "projectCardMeta": "5+ rooms",
+    "openingMode": "Opening…"
   },
   "marketing": {
     "about": {
@@ -904,6 +905,30 @@
       "learnAboutTunzone": "Learn about Tunzone",
       "contact": "Contact us",
       "contactDesc": "Have questions or feedback? We'd love to hear from you."
+    },
+    "forDesigners": {
+      "title": "Early Designer Program",
+      "metaDescription": "Vista Early Designer Program: lifetime 50% off tokens for interior designers who join early.",
+      "eyebrow": "Early Designer Program",
+      "headline": "50% off tokens — for life.",
+      "subtitle": "Join early and keep half-price tokens forever. Use Vista on client work: pin the sofa, table, bed, or any product you want in the design, then generate photorealistic options around them.",
+      "ctaPrimary": "Claim early access",
+      "ctaSecondary": "Email us to join",
+      "before": "Before",
+      "after": "After",
+      "shot1Title": "1. Room photo → redesign",
+      "shot1Desc": "Drag to compare. Same room, empty shell vs furnished concept in one pass.",
+      "shot1BeforeAlt": "Empty room before redesign",
+      "shot1AfterAlt": "Furnished room after Vista redesign",
+      "shot2Title": "2. Floor plan → whole apartment",
+      "shot2Desc": "Full Project coordinates every room from one plan — useful when a client needs a complete concept, not a single mood board.",
+      "shot2BeforeAlt": "Empty apartment floor plan",
+      "shot2AfterAlt": "Furnished apartment floor plan",
+      "shot3Title": "3. Real products, not invented ones",
+      "shot3Desc": "Renders link to actual retailer items — materials, furniture, and finishes you can put on a schedule.",
+      "shot3Alt": "Vista design board with render and sourced product from a local retailer",
+      "closeTitle": "Lifetime 50% token pricing",
+      "closeDesc": "Early Designer members pay half price on every token top-up — forever. Reply to your invite or email us to lock it in."
     },
     "features": {
       "title": "Features",

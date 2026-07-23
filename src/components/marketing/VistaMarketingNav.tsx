@@ -6,6 +6,7 @@ import { PwaInstallButton } from "@/components/PwaInstallButton";
 const NAV_LINKS = [
   { href: "/", label: "Home" },
   { href: "/features", label: "Features" },
+  { href: "/for-designers", label: "For designers" },
   { href: "/faq", label: "FAQ" },
   { href: "/blog", label: "Blog" },
   { href: "/about", label: "About" },

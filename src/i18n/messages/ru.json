@@ -856,7 +856,8 @@
     "projectCardTitle": "Вся квартира.",
     "projectCardDesc": "Все комнаты как один целостный интерьер — мебель и отделка сразу для каждой комнаты.",
     "projectCardPrice": "от 40",
-    "projectCardMeta": "5+ комнат"
+    "projectCardMeta": "5+ комнат",
+    "openingMode": "Открываем…"
   },
   "marketing": {},
   "priceQuote": {

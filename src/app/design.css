@@ -1409,6 +1409,22 @@ html[data-vista-theme="light"] .cd-page .cd-hub-card:hover {
   background: var(--foreground);
   color: var(--background);
 }
+.cd-mode-toggle-btn:disabled {
+  cursor: wait;
+}
+.cd-mode-toggle-btn--opening {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.cd-mode-toggle--opening .cd-mode-toggle-btn:not(.cd-mode-toggle-btn--opening) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.cd-mode-entry-spinner {
+  flex-shrink: 0;
+}
 
 @media (max-width: 768px) {
   .cd-mode-toggle-btn {
@@ -1446,6 +1462,15 @@ html[data-vista-theme="light"] .cd-page .cd-hub-card:hover {
 .cd-mode-list-item--selected {
   border-color: var(--primary);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 25%, transparent);
+}
+.cd-mode-list-item:disabled {
+  cursor: wait;
+}
+.cd-mode-list-item--opening {
+  border-color: var(--primary);
+}
+.cd-mode-list-item--opening:not(.cd-mode-list-item--selected) {
+  opacity: 0.85;
 }
 
 .cd-mode-list-thumb {
@@ -1533,6 +1558,7 @@ html[data-vista-theme="light"] .cd-page .cd-hub-card:hover {
 }
 
 .cd-mode-card {
+  position: relative;
   border-radius: 20px;
   overflow: hidden;
   background: var(--card);
@@ -1558,6 +1584,24 @@ html[data-vista-theme="light"] .cd-page .cd-mode-card:hover {
 .cd-page.cd-page--light .cd-mode-card--selected,
 html[data-vista-theme="light"] .cd-page .cd-mode-card--selected {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 25%, transparent), 0 16px 48px rgba(60, 35, 10, 0.10);
+}
+.cd-mode-card--opening {
+  pointer-events: none;
+}
+.cd-mode-card--disabled {
+  opacity: 0.55;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+.cd-mode-card-opening {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--background) 72%, transparent);
+  border-radius: inherit;
+  z-index: 2;
 }
 
 .cd-mode-card-photo {

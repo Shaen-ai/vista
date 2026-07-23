@@ -853,7 +853,8 @@
     "projectCardTitle": "Ամբողջ բնակարան.",
     "projectCardDesc": "Բոլոր սենյակների ամբողջական ինտերիեր՝ յուրաքանչյուրի համար անհատական կահավորման և հարդարման լուծումներով։",
     "projectCardPrice": "40+",
-    "projectCardMeta": "5+ սենյակ"
+    "projectCardMeta": "5+ սենյակ",
+    "openingMode": "Բացվում է…"
   },
   "marketing": {},
   "priceQuote": {
