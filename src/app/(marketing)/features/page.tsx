@@ -2,15 +2,15 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { localeFromRequest } from "@/lib/localeFromRequest";
 import { translate } from "@/i18n/translate";
-import { VISTA_SITE_URL } from "@/lib/siteUrl";
+import { buildMarketingMetadata } from "@/lib/marketingMetadata";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await localeFromRequest();
-  return {
+  return buildMarketingMetadata({
+    path: "/features",
     title: translate(locale, "marketing.features.title") + " — Vista",
     description: translate(locale, "marketing.features.metaDescription"),
-    alternates: { canonical: `${VISTA_SITE_URL}/features` },
-  };
+  });
 }
 
 const FEATURES = [

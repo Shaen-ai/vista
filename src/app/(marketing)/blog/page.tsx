@@ -1,13 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { getBlogPosts } from "@/lib/blog";
-import { VISTA_SITE_URL } from "@/lib/siteUrl";
+import { buildMarketingMetadata } from "@/lib/marketingMetadata";
 
-export const metadata: Metadata = {
-  title: "Blog — Vista",
-  description: "Articles about interior design, room redesign tips, and how Vista works.",
-  alternates: { canonical: `${VISTA_SITE_URL}/blog` },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  return buildMarketingMetadata({
+    path: "/blog",
+    title: "Blog — Vista",
+    description: "Articles about interior design, room redesign tips, and how Vista works.",
+  });
+}
 
 export default function BlogIndexPage() {
   const posts = getBlogPosts();

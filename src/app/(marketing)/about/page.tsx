@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
 import { localeFromRequest } from "@/lib/localeFromRequest";
 import { translate } from "@/i18n/translate";
-import { VISTA_SITE_URL } from "@/lib/siteUrl";
+import { buildMarketingMetadata } from "@/lib/marketingMetadata";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await localeFromRequest();
-  return {
+  return buildMarketingMetadata({
+    path: "/about",
     title: translate(locale, "marketing.about.title") + " — Vista",
     description: translate(locale, "marketing.about.metaDescription"),
-    alternates: { canonical: `${VISTA_SITE_URL}/about` },
-  };
+  });
 }
 
 export default async function AboutPage() {
@@ -25,7 +25,11 @@ export default async function AboutPage() {
         {t("marketing.about.intro")}
       </p>
 
-      <div className="mt-16 grid gap-10 sm:grid-cols-3">
+      <div className="mt-16">
+        <h2 className="text-2xl font-bold text-[var(--foreground)]">
+          {t("marketing.about.valuesHeading")}
+        </h2>
+        <div className="mt-10 grid gap-10 sm:grid-cols-3">
         {(["value1", "value2", "value3"] as const).map((key) => (
           <div key={key}>
             <h3 className="text-lg font-semibold text-[var(--foreground)]">
@@ -36,6 +40,7 @@ export default async function AboutPage() {
             </p>
           </div>
         ))}
+        </div>
       </div>
 
       <div className="mt-16 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-8">

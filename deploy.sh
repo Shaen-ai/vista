@@ -176,6 +176,14 @@ command -v pm2 >/dev/null 2>&1 || {
 }
 
 cd "$REMOTE_DIR"
+
+# Stop the app before rewriting .next. Building while `next start` is live causes
+# MODULE_NOT_FOUND / ENOENT storms and 500s on /_next/static/*.js|*.css.
+if pm2 describe "$PM2_NAME" >/dev/null 2>&1; then
+  echo "==> pm2 stop $PM2_NAME (avoid serving half-built .next)"
+  pm2 stop "$PM2_NAME" || true
+fi
+
 echo "==> $(pwd): npm ci (include dev deps for Tailwind/PostCSS build)"
 # Server shells often export NODE_ENV=production; that skips devDependencies and breaks CSS.
 npm ci --include=dev
@@ -198,8 +206,8 @@ if pm2 describe "$PM2_NAME" >/dev/null 2>&1; then
 fi
 
 if pm2 describe "$PM2_NAME" >/dev/null 2>&1; then
-  echo "==> pm2 reload $PM2_NAME"
-  HOSTNAME=0.0.0.0 NODE_ENV=production PORT="$PORT" pm2 reload "$PM2_NAME" --update-env
+  echo "==> pm2 restart $PM2_NAME"
+  HOSTNAME=0.0.0.0 NODE_ENV=production PORT="$PORT" pm2 restart "$PM2_NAME" --update-env
 else
   echo "==> pm2 start $PM2_NAME"
   HOSTNAME=0.0.0.0 NODE_ENV=production PORT="$PORT" pm2 start npm --name "$PM2_NAME" -- start

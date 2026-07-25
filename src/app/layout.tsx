@@ -24,8 +24,10 @@ import { PwaInstallProvider } from "@/components/PwaInstallProvider";
 
 const VISTA_THEME_COLOR = "#1a1614";
 
-const GOOGLE_FONTS_URL =
-  "https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300..600;1,300..600&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+Armenian:wght@300;400;500;600;700&family=Noto+Sans+Armenian:wght@400;500;600;700&display=swap";
+const FONTSHARE_URL =
+  "https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&f[]=satoshi@400,500,700&display=swap";
+const NOTO_FONTS_URL =
+  "https://fonts.googleapis.com/css2?family=Noto+Serif+Armenian:wght@400;500;600;700&family=Noto+Sans+Armenian:wght@400;500;600;700&display=swap";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await localeFromRequest();
@@ -91,9 +93,12 @@ export default async function RootLayout({
   return (
     <html lang={ssrLocale} suppressHydrationWarning>
       <head>
+        <link rel="preconnect" href="https://api.fontshare.com" crossOrigin="anonymous" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href={GOOGLE_FONTS_URL} rel="stylesheet" />
+        <link href={FONTSHARE_URL} rel="stylesheet" />
+        <link href={NOTO_FONTS_URL} rel="stylesheet" />
+        <link rel="alternate" type="text/plain" href="/llms.txt" title="LLM-friendly site summary" />
       </head>
       <body className="antialiased" suppressHydrationWarning>
         <JsonLdScript data={buildWebApplicationJsonLd()} />

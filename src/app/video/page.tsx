@@ -247,7 +247,7 @@ function PlaybackBar({
     const cs = Math.floor((total * 100) % 100);
     return `${m}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
   };
-  const mono = "JetBrains Mono, ui-monospace, SFMono-Regular, monospace";
+  const mono = 'ui-monospace, "SFMono-Regular", monospace';
 
   return (
     <div style={{
@@ -439,10 +439,10 @@ const VISTA = {
   jysk:  { bg: "#e8f0fb", fg: "#1e40af" },
 };
 
-const BRAND = '"Fraunces", "EB Garamond", Georgia, serif';
-const SERIF = '"Noto Serif Armenian", "Fraunces", "EB Garamond", Georgia, serif';
-const SANS  = '"Noto Sans Armenian", "Inter Tight", "Inter", system-ui, sans-serif';
-const MONO  = '"JetBrains Mono", ui-monospace, monospace';
+const BRAND = '"Clash Display", "Noto Serif Armenian", sans-serif';
+const SERIF = '"Clash Display", "Noto Serif Armenian", sans-serif';
+const SANS  = '"Satoshi", "Noto Sans Armenian", system-ui, sans-serif';
+const MONO  = 'ui-monospace, "SFMono-Regular", monospace';
 
 const HERO_ROOM = "/video/refs/room8.jpg";
 
@@ -496,7 +496,7 @@ function AppChrome({ children, showCursor }: { children: React.ReactNode; showCu
   return (
     <div style={{ position: "absolute", inset: 0, background: VISTA.cream, padding: "48px 80px", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
-        <div style={{ fontFamily: BRAND, fontStyle: "italic", fontWeight: 400, fontSize: 42, color: VISTA.ink, letterSpacing: "-0.03em", lineHeight: 1 }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 400, fontSize: 42, color: VISTA.ink, letterSpacing: "-0.03em", lineHeight: 1 }}>
           vista
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -526,7 +526,7 @@ function SceneTitle() {
   return (
     <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", background: VISTA.cream }}>
       <div style={{ opacity, textAlign: "center", transform: `translateY(${(1 - fadeIn) * 14}px)` }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 300, fontSize: 220, color: VISTA.ink, letterSpacing: "-0.04em", lineHeight: 0.9, fontStyle: "italic" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 300, fontSize: 220, color: VISTA.ink, letterSpacing: "-0.04em", lineHeight: 0.9 }}>
           vista
         </div>
         <div style={{ height: 1, width: `${lineW * 360}px`, margin: "32px auto 0", background: VISTA.ink, opacity: 0.4 }} />
@@ -563,7 +563,7 @@ function ModeCard({
         </div>
       </div>
       <div style={{ padding: "24px 28px", flex: 1, display: "flex", flexDirection: "column" }}>
-        <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 400, fontSize: 34, color: VISTA.ink, letterSpacing: "-0.02em", lineHeight: 1 }}>{title}</div>
+        <div style={{ fontFamily: SERIF, fontWeight: 400, fontSize: 34, color: VISTA.ink, letterSpacing: "-0.02em", lineHeight: 1 }}>{title}</div>
         <div style={{ fontFamily: SANS, fontSize: 15, color: VISTA.inkSoft, marginTop: 10, lineHeight: 1.45, flex: 1 }}>{desc}</div>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 16, paddingTop: 16, borderTop: `1px solid ${VISTA.border}` }}>
           <div style={{ fontFamily: SANS, fontSize: 22, fontWeight: 700, color: accent, fontVariantNumeric: "tabular-nums" }}>{cost}</div>
@@ -587,7 +587,7 @@ function SceneModes() {
   return (
     <div style={{ position: "absolute", inset: 0, background: VISTA.cream, overflow: "hidden" }}>
       <div style={{ position: "absolute", top: 48, left: 80, right: 80, display: "flex", justifyContent: "space-between", alignItems: "center", opacity: headIn }}>
-        <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 400, fontSize: 42, color: VISTA.ink, letterSpacing: "-0.03em" }}>vista</div>
+        <div style={{ fontFamily: SERIF, fontWeight: 400, fontSize: 42, color: VISTA.ink, letterSpacing: "-0.03em" }}>vista</div>
         <div style={{ display: "flex", gap: 12 }}>
           <span style={pillStyle()}>Հայաստան</span>
           <span style={pillStyle()}>ՀԱՅ</span>
@@ -597,7 +597,7 @@ function SceneModes() {
 
       <div style={{ position: "absolute", top: 150, left: 0, right: 0, textAlign: "center", opacity: headIn, transform: `translateY(${(1 - headIn) * 12}px)` }}>
         <div style={{ fontFamily: MONO, fontSize: 13, letterSpacing: "0.24em", textTransform: "uppercase", color: VISTA.muted }}>քայլ 01 / ընտրեք ռեժիմը</div>
-        <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 400, fontSize: 64, color: VISTA.ink, letterSpacing: "-0.025em", marginTop: 10, lineHeight: 1 }}>Մեկ սենյակ կամ ողջ բնակարանը։</div>
+        <div style={{ fontFamily: SERIF, fontWeight: 400, fontSize: 64, color: VISTA.ink, letterSpacing: "-0.025em", marginTop: 10, lineHeight: 1 }}>Մեկ սենյակ կամ ողջ բնակարանը։</div>
       </div>
 
       <div style={{ position: "absolute", top: 350, left: "50%", transform: `translateX(-50%) translateY(${(1 - headIn) * 12}px)`, display: "flex", gap: 6, padding: 6, borderRadius: 999, background: "#fff", border: `1px solid ${VISTA.border}`, opacity: headIn }}>
@@ -745,7 +745,7 @@ function SceneReveal() {
       <div style={{ position: "absolute", top: 50, left: 60, fontFamily: MONO, fontSize: 14, letterSpacing: "0.24em", textTransform: "uppercase", color: "#fff", opacity: 0.65, textShadow: "0 1px 4px rgba(0,0,0,0.4)" }}>մինչ</div>
       <div style={{ position: "absolute", top: 50, right: 60, fontFamily: MONO, fontSize: 14, letterSpacing: "0.24em", textTransform: "uppercase", color: "#fff", opacity: 0.85, textShadow: "0 1px 4px rgba(0,0,0,0.4)" }}>հետո</div>
       <div style={{ position: "absolute", left: 0, right: 0, bottom: 80, textAlign: "center", opacity: labelOpacity, pointerEvents: "none" }}>
-        <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 400, fontSize: 64, color: "#fff", letterSpacing: "-0.02em", textShadow: "0 4px 24px rgba(0,0,0,0.6)" }}>ստեղծված է 18 վայրկյանում</div>
+        <div style={{ fontFamily: SERIF, fontWeight: 400, fontSize: 64, color: "#fff", letterSpacing: "-0.02em", textShadow: "0 4px 24px rgba(0,0,0,0.6)" }}>ստեղծված է 18 վայրկյանում</div>
         <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 13, letterSpacing: "0.24em", textTransform: "uppercase", color: "#fff", opacity: 0.75, textShadow: "0 1px 4px rgba(0,0,0,0.4)" }}>«մոդեռն կլասիկ» · 80 մ²</div>
       </div>
     </div>
@@ -813,7 +813,7 @@ function SceneShoppable() {
       })}
       <div style={{ position: "absolute", top: 60, left: 60, width: 700, opacity: clamp01((localTime - 0.1) / 0.5) * clamp01((duration - 0.4 - localTime) / 0.4) }}>
         <div style={{ fontFamily: MONO, fontSize: 13, letterSpacing: "0.24em", textTransform: "uppercase", color: "#fff", opacity: 0.7, textShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>ամեն իր</div>
-        <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 400, fontSize: 72, color: "#fff", letterSpacing: "-0.02em", marginTop: 6, lineHeight: 1, textShadow: "0 2px 12px rgba(0,0,0,0.5)", whiteSpace: "nowrap" }}>պատվիրելի է։</div>
+        <div style={{ fontFamily: SERIF, fontWeight: 400, fontSize: 72, color: "#fff", letterSpacing: "-0.02em", marginTop: 6, lineHeight: 1, textShadow: "0 2px 12px rgba(0,0,0,0.5)", whiteSpace: "nowrap" }}>պատվիրելի է։</div>
       </div>
       <div style={{ position: "absolute", bottom: 60, right: 60, opacity: clamp01((localTime - 2.4) / 0.5) * clamp01((duration - 0.4 - localTime) / 0.4), textAlign: "right" }}>
         <div style={{ fontFamily: MONO, fontSize: 12, letterSpacing: "0.2em", textTransform: "uppercase", color: "#fff", opacity: 0.6, textShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>ընդամենը · 12 իր</div>
@@ -839,7 +839,7 @@ function SceneMultiRoom() {
       <div style={{ position: "absolute", top: 60, left: 80, right: 80, display: "flex", justifyContent: "space-between", alignItems: "flex-end", opacity: clamp01(localTime / 0.5) }}>
         <div>
           <div style={{ fontFamily: MONO, fontSize: 13, letterSpacing: "0.24em", textTransform: "uppercase", color: VISTA.muted }}>նախագիծ · ալբերտ</div>
-          <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 400, fontSize: 56, color: VISTA.ink, letterSpacing: "-0.02em", marginTop: 6 }}>Ողջ բնակարանը։</div>
+          <div style={{ fontFamily: SERIF, fontWeight: 400, fontSize: 56, color: VISTA.ink, letterSpacing: "-0.02em", marginTop: 6 }}>Ողջ բնակարանը։</div>
         </div>
         <div style={{ fontFamily: SANS, fontSize: 18, color: VISTA.inkSoft, textAlign: "right" }}>
           <div style={{ fontWeight: 500 }}>5 սենյակ · 1 նախագիծ</div>
@@ -879,7 +879,7 @@ function SceneTokens() {
     <div style={{ position: "absolute", inset: 0, background: VISTA.creamSoft, overflow: "hidden" }}>
       <div style={{ position: "absolute", top: 80, left: 80, right: 80, opacity: headIn, transform: `translateY(${(1 - headIn) * 12}px)` }}>
         <div style={{ fontFamily: MONO, fontSize: 13, letterSpacing: "0.24em", textTransform: "uppercase", color: VISTA.muted }}>թոքեններով աշխատող</div>
-        <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 400, fontSize: 72, color: VISTA.ink, letterSpacing: "-0.025em", marginTop: 8, lineHeight: 1 }}>
+        <div style={{ fontFamily: SERIF, fontWeight: 400, fontSize: 72, color: VISTA.ink, letterSpacing: "-0.025em", marginTop: 8, lineHeight: 1 }}>
           Մուտք գործեք։ <span style={{ color: VISTA.orange }}>20 թոքեն—նվեր։</span>
         </div>
       </div>
@@ -908,7 +908,7 @@ function SceneTokens() {
       <div style={{ position: "absolute", left: 80, right: 80, bottom: 60, background: "#fff", borderRadius: 18, border: `1px solid ${VISTA.border}`, padding: "28px 36px", opacity: referralIn, transform: `translateY(${(1 - referralIn) * 24}px)`, boxShadow: "0 20px 40px -20px rgba(60,40,20,0.2)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 40 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.22em", textTransform: "uppercase", color: VISTA.muted }}>հրավեր</div>
-          <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 400, fontSize: 38, color: VISTA.ink, letterSpacing: "-0.02em", marginTop: 6, lineHeight: 1 }}>
+          <div style={{ fontFamily: SERIF, fontWeight: 400, fontSize: 38, color: VISTA.ink, letterSpacing: "-0.02em", marginTop: 6, lineHeight: 1 }}>
             Հրավիրեք ընկերոջը, <span style={{ color: VISTA.orange }}>շահում եք դուք։</span>
           </div>
           <div style={{ fontFamily: SANS, fontSize: 15, color: VISTA.inkSoft, marginTop: 10 }}>
@@ -943,8 +943,8 @@ function SceneEndcard() {
     <div style={{ position: "absolute", inset: 0, background: VISTA.cream, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
       <div style={{ textAlign: "center", opacity: fadeIn, transform: `translateY(${(1 - fadeIn) * 16}px)` }}>
         <div style={{ fontFamily: MONO, fontSize: 13, letterSpacing: "0.32em", textTransform: "uppercase", color: VISTA.muted, marginBottom: 28 }}>vista · by tunzone</div>
-        <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 300, fontSize: 140, color: VISTA.ink, letterSpacing: "-0.035em", lineHeight: 1.15, whiteSpace: "nowrap" }}>Ձեր սենյակը,</div>
-        <div style={{ fontFamily: SERIF, fontStyle: "italic", fontWeight: 300, fontSize: 140, color: VISTA.orange, letterSpacing: "-0.035em", lineHeight: 1.15, whiteSpace: "nowrap" }}>նորովի։</div>
+        <div style={{ fontFamily: SERIF, fontWeight: 300, fontSize: 140, color: VISTA.ink, letterSpacing: "-0.035em", lineHeight: 1.15, whiteSpace: "nowrap" }}>Ձեր սենյակը,</div>
+        <div style={{ fontFamily: SERIF, fontWeight: 300, fontSize: 140, color: VISTA.orange, letterSpacing: "-0.035em", lineHeight: 1.15, whiteSpace: "nowrap" }}>նորովի։</div>
         <div style={{ margin: "48px auto 0", height: 1, width: `${lineW * 480}px`, background: VISTA.ink, opacity: 0.4 }} />
         <div style={{ marginTop: 40, display: "inline-flex", alignItems: "center", gap: 16, padding: "20px 36px", borderRadius: 14, background: VISTA.ink, color: VISTA.cream, fontFamily: SANS, fontSize: 22, fontWeight: 500, letterSpacing: "-0.005em", opacity: ctaIn, transform: `translateY(${(1 - ctaIn) * 12}px)` }}>
           <SparkleIcon size={20} color={VISTA.cream} />
@@ -987,10 +987,12 @@ const T = {
 export default function VistaVideoPage() {
   return (
     <>
+      <link rel="preconnect" href="https://api.fontshare.com" crossOrigin="anonymous" />
       <link rel="preconnect" href="https://fonts.googleapis.com" />
       <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       {/* eslint-disable-next-line @next/next/no-page-custom-font */}
-      <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300..600;1,300..600&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+Armenian:wght@300;400;500;600;700&family=Noto+Sans+Armenian:wght@400;500;600;700&display=swap" rel="stylesheet" />
+      <link href="https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&f[]=satoshi@400,500,700&display=swap" rel="stylesheet" />
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Armenian:wght@400;500;600;700&family=Noto+Sans+Armenian:wght@400;500;600;700&display=swap" rel="stylesheet" />
       <div style={{ position: "fixed", inset: 0 }}>
         <Stage width={1920} height={1080} duration={DURATION} background="#f2eee7" persistKey="vista-vid-v2">
           <TimeLabel />

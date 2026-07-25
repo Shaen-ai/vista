@@ -1,14 +1,21 @@
+"use client";
+
 import Link from "next/link";
+import { useTranslation } from "@/i18n/VistaLocaleProvider";
 
 const FOOTER_LINKS = [
-  { href: "/features", label: "Features" },
-  { href: "/for-designers", label: "For designers" },
-  { href: "/faq", label: "FAQ" },
-  { href: "/blog", label: "Blog" },
-  { href: "/about", label: "About" },
-];
+  { href: "/features", labelKey: "landing.footer.features" },
+  { href: "/for-designers", labelKey: "landing.footer.forDesigners" },
+  { href: "/faq", labelKey: "landing.footer.faq" },
+  { href: "/blog", labelKey: "landing.footer.blog" },
+  { href: "/about", labelKey: "landing.footer.about" },
+  { href: "/llms.txt", labelKey: "landing.footer.forAi" },
+] as const;
 
 export function VistaMarketingFooter() {
+  const { t } = useTranslation();
+  const year = new Date().getFullYear();
+
   return (
     <footer className="border-t border-[var(--border)] py-10">
       <div className="mx-auto max-w-5xl px-4 sm:px-6">
@@ -18,7 +25,7 @@ export function VistaMarketingFooter() {
               vista
             </Link>
             <span className="text-xs text-[var(--muted-foreground)]">
-              Part of{" "}
+              {t("landing.footer.partOf")}{" "}
               <a
                 href="https://tunzone.com"
                 target="_blank"
@@ -36,13 +43,13 @@ export function VistaMarketingFooter() {
                 href={link.href}
                 className="text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
               >
-                {link.label}
+                {t(link.labelKey)}
               </Link>
             ))}
           </div>
         </div>
         <p className="mt-6 text-center text-xs text-[var(--muted-foreground)] sm:text-left">
-          © {new Date().getFullYear()} Tunzone. All rights reserved. ·{" "}
+          {t("landing.footer.copyright", { year })} ·{" "}
           <a href="mailto:support@tunzone.com" className="hover:underline">
             support@tunzone.com
           </a>

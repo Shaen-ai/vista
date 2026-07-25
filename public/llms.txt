@@ -2,6 +2,8 @@
 
 > Upload a room photo, pick real furniture from local stores, and get photorealistic AI redesigns in seconds.
 
+Full reference (FAQ, pricing detail): https://vista.tunzone.com/llms-full.txt
+
 ## Product
 
 - Name: Vista

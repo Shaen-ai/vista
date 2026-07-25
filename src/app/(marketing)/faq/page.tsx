@@ -1,18 +1,18 @@
 import type { Metadata } from "next";
 import { localeFromRequest } from "@/lib/localeFromRequest";
 import { translate } from "@/i18n/translate";
-import { VISTA_SITE_URL } from "@/lib/siteUrl";
+import { buildMarketingMetadata } from "@/lib/marketingMetadata";
 import { JsonLdScript } from "@/components/marketing/JsonLdScript";
 import { buildFaqJsonLd } from "@/lib/jsonLd";
 import { FaqAccordion } from "./FaqAccordion";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await localeFromRequest();
-  return {
+  return buildMarketingMetadata({
+    path: "/faq",
     title: translate(locale, "marketing.faq.title") + " — Vista",
     description: translate(locale, "marketing.faq.metaDescription"),
-    alternates: { canonical: `${VISTA_SITE_URL}/faq` },
-  };
+  });
 }
 
 const FAQ_INDICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;

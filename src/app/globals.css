@@ -1,10 +1,10 @@
 @import "tailwindcss";
 
 :root {
-  --font-sans: "Noto Sans Armenian", "Inter Tight", "Inter", system-ui, -apple-system, sans-serif;
-  --font-serif: "Noto Serif Armenian", "Fraunces", Georgia, serif;
-  --font-brand: "Fraunces", "EB Garamond", Georgia, serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-sans: "Satoshi", "Noto Sans Armenian", system-ui, -apple-system, sans-serif;
+  --font-serif: "Clash Display", "Noto Serif Armenian", sans-serif;
+  --font-brand: "Clash Display", "Noto Serif Armenian", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", monospace;
 }
 
 body {

@@ -1,6 +1,9 @@
 # Cloudflare AI Crawler Unblock — Post-Deploy Checklist
 
-Vista currently runs behind Cloudflare, which has a **managed robots.txt** and **WAF rules** that block AI crawlers (GPTBot, ClaudeBot, etc.) with 403 responses. This must be fixed in the Cloudflare dashboard for AI assistants to discover and recommend vista.tunzone.com.
+Vista (`vista.tunzone.com`) and Landing (`tunzone.com`) run behind Cloudflare, which injects a **managed robots.txt** that Disallows GPTBot, ClaudeBot, Google-Extended, and other AI crawlers **before** the Next.js `robots.ts` allow rules. Compliant bots never reach app content until this is fixed.
+
+Landing checklist: [../landing/CLOUDFLARE_AI_CRAWLERS.md](../landing/CLOUDFLARE_AI_CRAWLERS.md).  
+Verify both origins: `bash scripts/verify-ai-crawlers.sh` from repo root.
 
 ## Steps
 

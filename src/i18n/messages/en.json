@@ -217,6 +217,7 @@
     "tryDifferentKeywords": "Try different keywords",
     "catalogTitle": "Catalog",
     "browseCatalog": "Browse catalog ({count})",
+    "catalogResizeHandle": "Resize catalog panel",
     "catalogHint": "Designs use scraped inventory only; products are matched automatically from your prompt.",
     "localCatalogEmpty": "Local mode requires products in our catalog. Add items from search or try a different prompt — generation cannot use off-catalog furniture.",
     "gatewayTimeout": "Generation took too long and timed out. Wait about two minutes, then try again. If it keeps happening, use a shorter prompt or pick a few catalog products first.",
@@ -888,12 +889,25 @@
     "projectCardDesc": "All rooms as one complete interior — furniture and finishes for every room at once.",
     "projectCardPrice": "from 40",
     "projectCardMeta": "5+ rooms",
-    "openingMode": "Opening…"
+    "openingMode": "Opening…",
+    "footer": {
+      "heading": "Learn about Vista",
+      "ariaLabel": "Learn more about Vista",
+      "features": "Features",
+      "forDesigners": "For designers",
+      "faq": "FAQ",
+      "blog": "Blog",
+      "about": "About",
+      "forAi": "For AI assistants",
+      "partOf": "Part of",
+      "copyright": "© {year} Tunzone. All rights reserved."
+    }
   },
   "marketing": {
     "about": {
       "title": "About Vista",
       "metaDescription": "Vista is Tunzone's interior design app. Upload a room photo, get photorealistic redesigns with real purchasable furniture.",
+      "valuesHeading": "Why Vista",
       "intro": "Vista is Tunzone's consumer interior design app. Upload a photo of your room, and we create photorealistic redesigned images featuring real, purchasable furniture from local Armenian stores — no designer appointment needed.",
       "value1Title": "Interior Design",
       "value1Desc": "Photorealistic room redesigns from your photos. Upload a photo and describe your style.",

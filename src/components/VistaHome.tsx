@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 import dynamic from "next/dynamic";
 import {
   Search,
@@ -115,6 +115,8 @@ import { ShareProjectModal } from "@/components/ShareProjectModal";
 import { LowBalancePrompt } from "@/components/LowBalancePrompt";
 import { useVistaUiTheme } from "@/app/VistaThemeProvider";
 import { VistaHeaderActions } from "@/components/VistaHeaderActions";
+import { TunzoneLogoLink } from "@/components/TunzoneLogoLink";
+import { VistaHomeMarketingLinks } from "@/components/marketing/VistaHomeMarketingLinks";
 import {
   authContextForApi,
   fetchTokenBalance,
@@ -250,6 +252,35 @@ function selectedProductKey(product: MarketplaceProduct): string {
 }
 
 const MOBILE_MEDIA_QUERY = "(max-width: 1024px)";
+
+const CATALOG_SIDEBAR_WIDTH_KEY = "vista.catalogSidebarWidth";
+const CATALOG_SIDEBAR_MIN = 240;
+const CATALOG_SIDEBAR_MAX = 560;
+const CATALOG_SIDEBAR_DEFAULT = 360;
+
+function clampCatalogSidebarWidth(width: number): number {
+  if (typeof window === "undefined") {
+    return Math.min(CATALOG_SIDEBAR_MAX, Math.max(CATALOG_SIDEBAR_MIN, Math.round(width)));
+  }
+  const maxByViewport = Math.min(
+    CATALOG_SIDEBAR_MAX,
+    Math.floor(window.innerWidth * 0.45),
+  );
+  return Math.min(maxByViewport, Math.max(CATALOG_SIDEBAR_MIN, Math.round(width)));
+}
+
+function readStoredCatalogSidebarWidth(): number {
+  if (typeof window === "undefined") return CATALOG_SIDEBAR_DEFAULT;
+  try {
+    const raw = localStorage.getItem(CATALOG_SIDEBAR_WIDTH_KEY);
+    if (raw == null) return CATALOG_SIDEBAR_DEFAULT;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) return CATALOG_SIDEBAR_DEFAULT;
+    return clampCatalogSidebarWidth(parsed);
+  } catch {
+    return CATALOG_SIDEBAR_DEFAULT;
+  }
+}
 
 function subscribeMobileMediaQuery(onChange: () => void) {
   const mq = window.matchMedia(MOBILE_MEDIA_QUERY);
@@ -1258,6 +1289,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     () => false,
   );
   const [mobileTab, setMobileTab] = useState<"search" | "design" | "selected">("design");
+  const [catalogWidthPx, setCatalogWidthPx] = useState(CATALOG_SIDEBAR_DEFAULT);
+  const catalogResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [roomCameraOpen, setRoomCameraOpen] = useState(false);
   const [allProductsModalOpen, setAllProductsModalOpen] = useState(false);
@@ -1279,6 +1312,71 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const { ensureProject, persistGeneratedVersion } = useQuickRoomAutosave({
     enabled: variant === "quick-workspace",
   });
+
+  useEffect(() => {
+    setCatalogWidthPx(readStoredCatalogSidebarWidth());
+  }, []);
+
+  useEffect(() => {
+    if (isMobile) return;
+    const onResize = () => {
+      setCatalogWidthPx((width) => clampCatalogSidebarWidth(width));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [isMobile]);
+
+  const finishCatalogResize = useCallback((target: HTMLDivElement, pointerId: number) => {
+    if (!catalogResizeRef.current) return;
+    catalogResizeRef.current = null;
+    target.releasePointerCapture(pointerId);
+    document.body.style.userSelect = "";
+    document.body.style.cursor = "";
+    setCatalogWidthPx((width) => {
+      const clamped = clampCatalogSidebarWidth(width);
+      try {
+        localStorage.setItem(CATALOG_SIDEBAR_WIDTH_KEY, String(clamped));
+      } catch {
+        /* ignore quota / private mode */
+      }
+      return clamped;
+    });
+  }, []);
+
+  const onCatalogResizePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (isMobile) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      catalogResizeRef.current = { startX: event.clientX, startWidth: catalogWidthPx };
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+    },
+    [catalogWidthPx, isMobile],
+  );
+
+  const onCatalogResizePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = catalogResizeRef.current;
+    if (!drag) return;
+    const nextWidth = clampCatalogSidebarWidth(
+      drag.startWidth + (event.clientX - drag.startX),
+    );
+    setCatalogWidthPx(nextWidth);
+  }, []);
+
+  const onCatalogResizePointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      finishCatalogResize(event.currentTarget, event.pointerId);
+    },
+    [finishCatalogResize],
+  );
+
+  const onCatalogResizePointerCancel = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      finishCatalogResize(event.currentTarget, event.pointerId);
+    },
+    [finishCatalogResize],
+  );
 
   useEffect(() => {
     if (getAuthToken()) {
@@ -3329,7 +3427,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               <span>{t("common.back")}</span>
             </button>
           ) : (
-            <h1 className="cd-brand-logo">vista</h1>
+            <TunzoneLogoLink priority />
           )}
         </div>
 
@@ -3346,13 +3444,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         <div className="cd-landing">
           <div className="cd-landing-inner cd-landing-animate">
               <>
-            {/* Step label */}
-            <div className="cd-step-label">
-              <span className="cd-step-label-line" />
-              <span className="cd-step-label-text">{t("landing.stepLabel")}</span>
-              <span className="cd-step-label-line" />
-            </div>
-
             {/* Headline */}
             <h2 className="cd-landing-headline">
               {t("landing.headline")}
@@ -3537,12 +3628,22 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               </div>
             </div>
               </>
+            <VistaHomeMarketingLinks />
           </div>
         </div>
       )}
 
       {!showLanding && (variant !== "project-workspace" && vistaMode !== "project" ? (
-      <div className={`cd-main-grid cd-main-grid--mobile-tabs flex-1 min-h-0 overflow-hidden ${isMobile ? "flex flex-col h-full" : catalogAvailable ? "grid grid-cols-[minmax(240px,320px)_minmax(0,1fr)_minmax(240px,380px)]" : "grid grid-cols-1"}`}>
+      <div
+        className={`cd-main-grid cd-main-grid--mobile-tabs flex-1 min-h-0 overflow-hidden ${isMobile ? "flex flex-col h-full" : catalogAvailable ? "grid" : "grid grid-cols-1"}`}
+        style={
+          !isMobile && catalogAvailable
+            ? {
+                gridTemplateColumns: `${catalogWidthPx}px minmax(0,1fr) minmax(240px,380px)`,
+              }
+            : undefined
+        }
+      >
         {catalogAvailable && isMobile && (
           <div className="cd-mobile-tab-bar fixed bottom-0 left-0 right-0 z-50 flex border-t border-[var(--border)] bg-[var(--card)]" style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
             <button
@@ -3574,7 +3675,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           </div>
         )}
         {catalogAvailable && (
-        <aside className={`cd-sidebar flex flex-col flex-1 min-h-0 min-w-0 h-full border-r border-[var(--border)] bg-[var(--card)] overflow-hidden ${isMobile && mobileTab !== "search" ? "hidden" : ""} ${isMobile ? "pb-20" : ""}`}>
+        <aside className={`cd-sidebar relative flex flex-col flex-1 min-h-0 min-w-0 h-full border-r border-[var(--border)] bg-[var(--card)] overflow-hidden ${isMobile && mobileTab !== "search" ? "hidden" : ""} ${isMobile ? "pb-20" : ""}`}>
           {isMobile && (
             <div className="cd-panel-head">
               <h2 className="cd-panel-head-title">{t("page.catalogTitle")}</h2>
@@ -3745,6 +3846,22 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               </div>
             )}
           </div>
+          {!isMobile && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t("page.catalogResizeHandle")}
+              aria-valuenow={catalogWidthPx}
+              aria-valuemin={CATALOG_SIDEBAR_MIN}
+              aria-valuemax={CATALOG_SIDEBAR_MAX}
+              tabIndex={0}
+              className="cd-catalog-resize-handle"
+              onPointerDown={onCatalogResizePointerDown}
+              onPointerMove={onCatalogResizePointerMove}
+              onPointerUp={onCatalogResizePointerUp}
+              onPointerCancel={onCatalogResizePointerCancel}
+            />
+          )}
         </aside>
         )}
 

@@ -650,7 +650,7 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
   align-items: center;
   justify-content: space-between;
   padding: 0 2rem;
-  height: 60px;
+  height: 56px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
   flex-shrink: 0;
@@ -662,7 +662,7 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
 @media (max-width: 768px) {
   .cd-editorial-header {
     padding: 0 0.75rem;
-    height: 52px;
+    height: 56px;
     gap: 0.5rem;
     overflow: visible;
   }
@@ -745,7 +745,6 @@ html[data-vista-theme="light"] .cd-page .cd-header-sheet {
 
 .cd-header-sheet-title {
   font-family: var(--font-serif);
-  font-style: italic;
   font-weight: 400;
   font-size: 1.125rem;
   letter-spacing: -0.02em;
@@ -912,8 +911,7 @@ a.cd-header-sheet-row:hover {
 /* ── Brand logo ── */
 .cd-brand-logo {
   font-family: var(--font-brand);
-  font-style: italic;
-  font-weight: 300;
+  font-weight: 500;
   font-size: 2rem;
   letter-spacing: -0.03em;
   line-height: 1;
@@ -985,7 +983,6 @@ a.cd-header-sheet-row:hover {
 /* ── Landing headline ── */
 .cd-landing-headline {
   font-family: var(--font-serif);
-  font-style: italic;
   font-weight: 400;
   font-size: clamp(2.2rem, 5vw, 3.75rem);
   line-height: 1.1;
@@ -1269,7 +1266,6 @@ html[data-vista-theme="light"] .cd-page .cd-hub-card:hover {
 
 .cd-hub-card-title {
   font-family: var(--font-serif);
-  font-style: italic;
   font-weight: 400;
   font-size: 1.1rem;
   line-height: 1.2;
@@ -1284,7 +1280,6 @@ html[data-vista-theme="light"] .cd-page .cd-hub-card:hover {
 .cd-hub-card-title-input {
   width: 100%;
   font-family: var(--font-serif);
-  font-style: italic;
   font-size: 1.1rem;
   background: transparent;
   border: none;
@@ -1656,7 +1651,6 @@ html[data-vista-theme="light"] .cd-page .cd-mode-card--selected {
 
 .cd-mode-card-title {
   font-family: var(--font-serif);
-  font-style: italic;
   font-weight: 400;
   font-size: 1.6rem;
   line-height: 1.15;
@@ -1712,6 +1706,39 @@ html[data-vista-theme="light"] .cd-page .cd-mode-card--selected {
 
 /* ── Main 3-column grid ── */
 .cd-main-grid > * { min-height: 0; }
+
+.cd-catalog-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  z-index: 20;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.cd-catalog-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.cd-catalog-resize-handle:hover::after,
+.cd-catalog-resize-handle:active::after,
+.cd-catalog-resize-handle:focus-visible::after {
+  background: color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+.cd-catalog-resize-handle:focus-visible {
+  outline: none;
+}
 
 .cd-sidebar--selected .cd-selected-products-list {
   flex: 1 1 0;
@@ -1955,7 +1982,6 @@ html[data-vista-theme="light"] .cd-page .cd-mobile-tab-bar {
 }
 .cd-panel-head-title {
   font-family: var(--font-serif);
-  font-style: italic;
   font-weight: 400;
   font-size: 1.05rem;
   letter-spacing: -0.01em;
@@ -2012,7 +2038,6 @@ html[data-vista-theme="light"] .cd-page .cd-mobile-tab-bar {
 }
 .cd-upload-title {
   font-family: var(--font-serif);
-  font-style: italic;
   font-weight: 400;
   font-size: 1.35rem;
   line-height: 1.2;
@@ -2064,7 +2089,6 @@ html[data-vista-theme="light"] .cd-page .cd-mobile-tab-bar {
 /* ── Project / working-area step typography ── */
 .cd-step-title {
   font-family: var(--font-serif);
-  font-style: italic;
   font-weight: 400;
   font-size: 1.75rem;
   line-height: 1.15;
