@@ -32,7 +32,6 @@ import {
   Download,
   Save,
   Check,
-  Edit3,
   Share2,
 } from "lucide-react";
 import {
@@ -3131,6 +3130,36 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     );
   }
 
+  const customResultActions = (
+    <div className={isMobile ? "flex flex-col gap-2 w-full" : undefined}>
+      <button
+        type="button"
+        onClick={handleCustomInquiry}
+        className={
+          isMobile
+            ? "w-full h-12 px-4 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 bg-[var(--primary)] text-white hover:brightness-110 transition-all cursor-pointer"
+            : "w-full py-3 rounded-xl bg-[var(--primary)] text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer"
+        }
+      >
+        <Send size={18} />
+        {getAuthToken() ? t("page.customResultCta") : t("page.customResultSignInCta")}
+      </button>
+      <button
+        type="button"
+        onClick={handleOpenSaveDesign}
+        disabled={saveDesignDone}
+        className={
+          isMobile
+            ? "w-full h-12 px-4 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] hover:bg-[var(--border)] transition-all cursor-pointer disabled:opacity-60"
+            : "mt-3 w-full py-3 rounded-xl border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] font-bold flex items-center justify-center gap-2 hover:brightness-105 transition-all cursor-pointer disabled:opacity-60"
+        }
+      >
+        {saveDesignDone ? <Check size={18} /> : isMobile ? null : <Save size={18} />}
+        {saveDesignDone ? t("page.designSaved") : t("page.saveDesign")}
+      </button>
+    </div>
+  );
+
   const quickRoomResultPanel = showFinalResult ? (
     <div className="w-full flex flex-col gap-4">
                 {/* Room type & camera angle only — no long AI finish description */}
@@ -3382,24 +3411,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                         {t("page.customResultLoginNote")}
                       </p>
                     )}
-                    <button
-                      type="button"
-                      onClick={handleCustomInquiry}
-                      className="w-full py-3 rounded-xl bg-[var(--primary)] text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer"
-                    >
-                      <Send size={18} />
-                      {getAuthToken() ? t("page.customResultCta") : t("page.customResultSignInCta")}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleOpenSaveDesign}
-                      disabled={saveDesignDone}
-                      className="mt-3 w-full py-3 rounded-xl border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] font-bold flex items-center justify-center gap-2 hover:brightness-105 transition-all cursor-pointer disabled:opacity-60"
-                    >
-                      {saveDesignDone ? <Check size={18} /> : <Save size={18} />}
-                      {saveDesignDone ? t("page.designSaved") : t("page.saveDesign")}
-                    </button>
+                    {!isMobile && customResultActions}
                   </div>
                 )}
     </div>
@@ -4625,11 +4637,26 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         <div
           className="fixed inset-0 z-[90] flex items-center justify-center backdrop-blur-sm bg-black/40"
           onClick={() => !saveDesignSaving && setSaveDesignModalOpen(false)}
+          role="presentation"
         >
           <div
-            className="w-full max-w-md mx-4 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl"
+            className="relative w-full max-w-md mx-4 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="save-design-modal-title"
           >
+            {!saveDesignDone && (
+              <button
+                type="button"
+                onClick={() => !saveDesignSaving && setSaveDesignModalOpen(false)}
+                disabled={saveDesignSaving}
+                className="absolute top-4 right-4 p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
+                aria-label={t("common.close")}
+              >
+                <X size={18} />
+              </button>
+            )}
             {saveDesignDone ? (
               <div className="flex flex-col items-center gap-3 py-4">
                 <div className="w-12 h-12 rounded-full bg-green-500/10 flex items-center justify-center">
@@ -4639,31 +4666,40 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               </div>
             ) : (
               <>
-                <h3 className="text-base font-bold mb-4 flex items-center gap-2">
+                <h3
+                  id="save-design-modal-title"
+                  className="text-base font-bold mb-4 flex items-center gap-2 pr-8"
+                >
                   <Save size={18} className="text-[var(--primary)]" />
                   {t("page.saveDesign")}
                 </h3>
-                <label className="block text-sm font-medium text-[var(--foreground)] mb-1.5">
+                <label
+                  htmlFor="save-design-name"
+                  className="block text-sm font-medium text-[var(--foreground)] mb-1.5"
+                >
                   {t("page.designName")}
                 </label>
-                <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-2 mb-5">
                   <input
+                    id="save-design-name"
                     type="text"
                     value={saveDesignName}
                     onChange={(e) => setSaveDesignName(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter" && !saveDesignSaving) handleSaveDesign(); }}
                     placeholder={t("page.designNamePlaceholder")}
-                    className="flex-1 px-4 py-3 rounded-xl bg-[var(--muted)] border border-[var(--border)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/50 focus:border-[var(--primary)] transition-all"
+                    className="flex-1 h-[46px] px-4 rounded-xl bg-[var(--muted)] border border-[var(--border)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40 focus:border-[var(--border)] transition-all"
                     autoFocus
                     disabled={saveDesignSaving}
                   />
                   <button
                     type="button"
                     onClick={() => setSaveDesignName(generateAutoDesignName())}
-                    className="p-2.5 rounded-lg border border-[var(--border)] bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+                    disabled={saveDesignSaving}
+                    className="h-[46px] w-[46px] shrink-0 flex items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors disabled:opacity-50"
                     title={t("page.autoName")}
+                    aria-label={t("page.autoName")}
                   >
-                    <Edit3 size={16} />
+                    <RefreshCw size={16} />
                   </button>
                 </div>
                 <div className="flex gap-3">
@@ -4671,7 +4707,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     type="button"
                     onClick={() => setSaveDesignModalOpen(false)}
                     disabled={saveDesignSaving}
-                    className="flex-1 py-3 rounded-xl font-bold border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] hover:bg-[var(--border)] transition-all cursor-pointer disabled:opacity-50"
+                    className="flex-1 h-12 px-4 rounded-xl text-sm font-semibold flex items-center justify-center border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] hover:bg-[var(--border)] transition-all cursor-pointer disabled:opacity-50"
                   >
                     {t("common.cancel")}
                   </button>
@@ -4679,10 +4715,10 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     type="button"
                     onClick={handleSaveDesign}
                     disabled={saveDesignSaving}
-                    className="flex-1 py-3 rounded-xl font-bold bg-[var(--primary)] text-white hover:brightness-110 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="flex-1 h-12 px-4 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 bg-[var(--primary)] text-white hover:brightness-110 transition-all cursor-pointer disabled:opacity-50"
                   >
-                    {saveDesignSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-                    {t("page.saveDesign")}
+                    {saveDesignSaving ? <Loader2 size={18} className="animate-spin" /> : null}
+                    {t("page.save")}
                   </button>
                 </div>
               </>
@@ -4700,6 +4736,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         loaderPhase={quickRoomLoaderPhase}
         error={error}
         onRetry={() => void handleGenerateClick()}
+        footer={isMobile && designMode === "custom" && showFinalResult ? customResultActions : undefined}
       >
         {quickRoomResultPanel}
       </QuickRoomResultOverlay>

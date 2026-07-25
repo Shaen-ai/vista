@@ -355,6 +355,7 @@
     "setActiveRender": "Select",
     "downloadDesign": "Download image",
     "saveDesign": "Save Design",
+    "save": "Save",
     "designSaved": "Design Saved!",
     "designPersistFailed": "Your design was generated but could not be saved to your account. Please try again.",
     "designName": "Design name",

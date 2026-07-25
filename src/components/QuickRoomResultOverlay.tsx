@@ -16,6 +16,7 @@ export function QuickRoomResultOverlay({
   error,
   onRetry,
   children,
+  footer,
 }: {
   open: boolean;
   onBack: () => void;
@@ -25,13 +26,19 @@ export function QuickRoomResultOverlay({
   error?: string | null;
   onRetry?: () => void;
   children?: React.ReactNode;
+  footer?: React.ReactNode;
 }) {
   const { t } = useTranslation();
 
   if (!open) return null;
 
   return (
-    <div className="cd-result-overlay" role="dialog" aria-modal="true" aria-label={t("page.resultScreenTitle")}>
+    <div
+      className={`cd-result-overlay${footer ? " cd-result-overlay--with-footer" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("page.resultScreenTitle")}
+    >
       <header className="cd-result-overlay-header">
         <button
           type="button"
@@ -60,6 +67,8 @@ export function QuickRoomResultOverlay({
           children
         )}
       </div>
+
+      {footer ? <div className="cd-result-overlay-footer">{footer}</div> : null}
     </div>
   );
 }
