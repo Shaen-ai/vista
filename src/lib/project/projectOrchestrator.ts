@@ -109,7 +109,7 @@ import {
 } from "./viewpointPhaseContext";
 import { detectedRoomToRoomAnalysis, planDoorInventoryForLock } from "./detectedRoomToRoomAnalysis";
 import { pipelineLog, pipelineTimed, summarizeRoomParams, userFlowLog } from "@/lib/pipelineLog";
-import { isFreeRenderMode, resolveDesignMode } from "@/lib/designModeConfig";
+import { isFreeRenderMode, resolveDesignMode, designModeCatalogFromPreferences } from "@/lib/designModeConfig";
 import { runWithLogContext } from "@/lib/logSink";
 import { resolveFinishRoomRenderStrategy } from "./finishRoomRenderStrategy";
 import { optimizeImageBufferForAi } from "@/lib/optimizeImageForAi";
@@ -3791,7 +3791,8 @@ async function generateRoomPhaseImplBody(
   if (!state.floorPlanConfirmed) throw new Error("Floor plan not confirmed");
 
   if (opts?.designMode) {
-    const resolved = resolveDesignMode(opts.designMode);
+    const catalog = designModeCatalogFromPreferences(state.preferences);
+    const resolved = resolveDesignMode(opts.designMode, catalog);
     if (resolved !== state.preferences.designMode) {
       state.preferences = { ...state.preferences, designMode: resolved };
       await setProject(state);
@@ -3820,8 +3821,9 @@ async function generateRoomPhaseImplBody(
   // Resolve all viewpoint targets before gallery-edit routing (needs target count).
   let targets = getViewpointGenerationTargets(state, roomId);
 
-  const designModeEarly = resolveDesignMode(state.preferences.designMode);
-  const freeRenderEarly = isFreeRenderMode(designModeEarly);
+  const designModeCatalog = designModeCatalogFromPreferences(state.preferences);
+  const designModeEarly = resolveDesignMode(state.preferences.designMode, designModeCatalog);
+  const freeRenderEarly = isFreeRenderMode(designModeEarly, designModeCatalog);
 
   if (freeRenderEarly && phase === "base" && !opts?.photoId) {
     room.renders = [];
@@ -3846,8 +3848,8 @@ async function generateRoomPhaseImplBody(
     }
   }
 
-  const designMode = resolveDesignMode(state.preferences.designMode);
-  const freeRenderMode = isFreeRenderMode(designMode);
+  const designMode = resolveDesignMode(state.preferences.designMode, designModeCatalog);
+  const freeRenderMode = isFreeRenderMode(designMode, designModeCatalog);
   if (freeRenderMode && phase !== "base") {
     return state;
   }
@@ -4573,7 +4575,10 @@ async function finishRoomImpl(
   const targets = getViewpointGenerationTargets(state, roomId);
   room.viewpointTargetCount = targets.length;
   const finishStrategy = resolveFinishRoomRenderStrategy(roomPhotos);
-  const freeRender = isFreeRenderMode(resolveDesignMode(state.preferences.designMode));
+  const freeRender = isFreeRenderMode(
+    resolveDesignMode(state.preferences.designMode, designModeCatalogFromPreferences(state.preferences)),
+    designModeCatalogFromPreferences(state.preferences),
+  );
   const allRoomPhotos = buildLabeledRoomPhotos(targets, detectedRoom);
 
   const angleDescriptionFor = (photo: (typeof targets)[number]): string => {
@@ -4839,7 +4844,12 @@ async function finishRoomImpl(
   // Custom design has no catalog tie — skip materials/products entirely. The
   // render + technical drawings (built from the floor-plan analysis) are still
   // produced downstream.
-  if (isFreeRenderMode(resolveDesignMode(state.preferences.designMode))) {
+  if (
+    isFreeRenderMode(
+      resolveDesignMode(state.preferences.designMode, designModeCatalogFromPreferences(state.preferences)),
+      designModeCatalogFromPreferences(state.preferences),
+    )
+  ) {
     room.usedScrapedProducts = [];
     room.selectedCatalogIds = [];
     room.materials = null;

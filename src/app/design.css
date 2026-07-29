@@ -565,6 +565,7 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
   display: flex;
   flex-direction: column;
   background: var(--background);
+  overscroll-behavior: none;
 }
 .cd-result-overlay-header {
   flex-shrink: 0;
@@ -611,6 +612,8 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 1rem;
   max-width: 56rem;
   width: 100%;
@@ -629,6 +632,26 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
 .cd-result-overlay--with-footer .cd-result-overlay-body {
   padding-bottom: 9rem;
 }
+
+.cd-page.cd-page--result-overlay {
+  overflow: hidden;
+  height: 100dvh;
+}
+
+.cd-page--result-overlay .cd-main-grid main,
+.cd-page--result-overlay .cd-main-grid .cd-sidebar {
+  overflow: hidden !important;
+}
+
+@media (max-width: 640px) {
+  .cd-result-overlay-body {
+    scrollbar-width: none;
+  }
+  .cd-result-overlay-body::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 .cd-result-error {
   margin: 2rem auto;
   max-width: 28rem;
@@ -648,6 +671,61 @@ html[data-vista-theme="light"] .cd-page .cd-product-card:hover {
   font-weight: 600;
   border: none;
   cursor: pointer;
+}
+
+.cd-result-action-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.5rem 0.625rem;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: transparent;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.cd-result-action-row:last-child {
+  border-bottom: none;
+}
+
+.cd-result-action-row:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--muted) 40%, transparent);
+}
+
+.cd-result-action-row--active {
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.cd-result-action-row--active .cd-result-action-icon {
+  background: color-mix(in srgb, var(--primary) 14%, var(--muted));
+  color: var(--primary);
+}
+
+.cd-result-action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.75rem;
+  background: var(--muted);
+  color: var(--primary);
+}
+
+.cd-result-action-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25;
 }
 
 /* ── Landing fade-in ── */

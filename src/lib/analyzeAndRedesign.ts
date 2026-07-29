@@ -562,11 +562,30 @@ export async function runPhasedGeneration(options: {
   previousPhaseProducts?: string[];
   onProgress: (status: string) => void;
   requestHeaders?: Record<string, string>;
+  /** When true, hold API progress until cosmetic analyse window completes (matches Custom loader). */
+  useCosmeticLoaderGate?: boolean;
+  cosmeticAnalyseMs?: number;
 }): Promise<PhasedGenerationResult> {
-  const { phase, formData, previousPhaseImage, previousPhaseProducts, onProgress, requestHeaders = {} } = options;
+  const {
+    phase,
+    formData,
+    previousPhaseImage,
+    previousPhaseProducts,
+    onProgress,
+    requestHeaders = {},
+    useCosmeticLoaderGate = false,
+    cosmeticAnalyseMs = QUICK_ROOM_COSMETIC_ANALYSE_MS,
+  } = options;
 
   const phaseLabel = phase === "base" ? "materials & lighting" : phase;
-  onProgress(`Selecting ${phaseLabel}...`);
+  const gate = useCosmeticLoaderGate ? createQuickRoomLoaderPhaseGate(onProgress) : null;
+  const emitProgress = (message: string) => {
+    if (gate) gate.gatedEmit(message);
+    else onProgress(message);
+  };
+
+  if (gate) gate.emitCosmeticAnalyse();
+  else emitProgress(`Selecting ${phaseLabel}...`);
 
   formData.set("designPhase", phase);
 
@@ -578,74 +597,87 @@ export async function runPhasedGeneration(options: {
     formData.set("previousPhaseProducts", JSON.stringify(previousPhaseProducts));
   }
 
-  onProgress(`Generating ${phaseLabel}...`);
+  const executeFetch = async (): Promise<PhasedGenerationResult> => {
+    emitProgress(`Generating ${phaseLabel}...`);
 
-  const res = await fetch("/api/interior-design/phased-generate", {
-    method: "POST",
-    body: formData,
-    headers: requestHeaders,
-  });
+    const res = await fetch("/api/interior-design/phased-generate", {
+      method: "POST",
+      body: formData,
+      headers: requestHeaders,
+    });
 
-  const rawBody = await res.text();
-  throwIfCloudflareChallenge(res, rawBody);
-
-  let json: {
-    error?: string;
-    code?: string;
-    data?: {
-      images?: Array<{ base64?: string; mimeType?: string }>;
-      confirmedCatalogIds?: string[];
-      missingCatalogIds?: string[];
-      allPhaseProductIds?: string[];
-      productLinks?: ProductPurchaseLink[];
-      imaginedSlots?: Array<{ family: string; subtype?: string | null; label: string }>;
-      slotNotices?: string[];
-    };
-    balance?: number;
-    required?: number;
-  };
-
-  try {
-    json = JSON.parse(rawBody);
-  } catch {
+    const rawBody = await res.text();
     throwIfCloudflareChallenge(res, rawBody);
-    throw new Error(
-      rawBody.trimStart().startsWith("<")
-        ? "Server returned an HTML error page (gateway timeout)."
-        : "Invalid JSON from phased-generate endpoint.",
-    );
-  }
 
-  if (!res.ok || json.error) {
-    throwIfAiServiceUnavailable(json);
-    if (res.status === 402) {
-      throw new TokenInsufficientError(
-        json.error || "Not enough tokens.",
-        json.balance ?? 0,
-        json.required ?? 0,
+    let json: {
+      error?: string;
+      code?: string;
+      data?: {
+        images?: Array<{ base64?: string; mimeType?: string }>;
+        confirmedCatalogIds?: string[];
+        missingCatalogIds?: string[];
+        allPhaseProductIds?: string[];
+        productLinks?: ProductPurchaseLink[];
+        imaginedSlots?: Array<{ family: string; subtype?: string | null; label: string }>;
+        slotNotices?: string[];
+      };
+      balance?: number;
+      required?: number;
+    };
+
+    try {
+      json = JSON.parse(rawBody);
+    } catch {
+      throwIfCloudflareChallenge(res, rawBody);
+      throw new Error(
+        rawBody.trimStart().startsWith("<")
+          ? "Server returned an HTML error page (gateway timeout)."
+          : "Invalid JSON from phased-generate endpoint.",
       );
     }
-    throw new Error(json.error || `Phase "${phase}" generation failed.`);
-  }
 
-  const spend = extractSpendPayload(json);
-  if (spend) dispatchSpendUpdate(spend);
+    if (!res.ok || json.error) {
+      throwIfAiServiceUnavailable(json);
+      if (res.status === 402) {
+        throw new TokenInsufficientError(
+          json.error || "Not enough tokens.",
+          json.balance ?? 0,
+          json.required ?? 0,
+        );
+      }
+      throw new Error(json.error || `Phase "${phase}" generation failed.`);
+    }
 
-  const imageData = json.data?.images?.[0];
-  if (!imageData?.base64) {
-    throw new Error(`Phase "${phase}" returned no image. Please try again.`);
-  }
+    const spend = extractSpendPayload(json);
+    if (spend) dispatchSpendUpdate(spend);
 
-  return {
-    image: { base64: imageData.base64, mimeType: imageData.mimeType || "image/png" },
-    confirmedProducts: json.data?.confirmedCatalogIds ?? [],
-    missingProducts: json.data?.missingCatalogIds ?? [],
-    allPhaseProductIds: json.data?.allPhaseProductIds ?? [],
-    productLinks: json.data?.productLinks ?? [],
-    imaginedSlots: json.data?.imaginedSlots,
-    slotNotices: json.data?.slotNotices,
-    balance: json.balance,
+    const imageData = json.data?.images?.[0];
+    if (!imageData?.base64) {
+      throw new Error(`Phase "${phase}" returned no image. Please try again.`);
+    }
+
+    return {
+      image: { base64: imageData.base64, mimeType: imageData.mimeType || "image/png" },
+      confirmedProducts: json.data?.confirmedCatalogIds ?? [],
+      missingProducts: json.data?.missingCatalogIds ?? [],
+      allPhaseProductIds: json.data?.allPhaseProductIds ?? [],
+      productLinks: json.data?.productLinks ?? [],
+      imaginedSlots: json.data?.imaginedSlots,
+      slotNotices: json.data?.slotNotices,
+      balance: json.balance,
+    };
   };
+
+  if (gate) {
+    emitProgress(`Selecting ${phaseLabel}...`);
+    const [, result] = await Promise.all([
+      sleepMs(cosmeticAnalyseMs).then(() => gate.openGate()),
+      executeFetch(),
+    ]);
+    return result;
+  }
+
+  return executeFetch();
 }
 
 /**

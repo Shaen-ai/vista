@@ -14,6 +14,8 @@ import {
 import { LanguageSwitcher } from "@/i18n/LanguageSwitcher";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
 import { DEFAULT_QUICK_ROOM_PROMPT } from "@/lib/quickRoomDefaultPrompt";
+import type { ProductPurchaseLink } from "@/app/store";
+import { MadeProductsList } from "@/components/MadeProductsList";
 
 export type ShareVersion = {
   id: string;
@@ -22,6 +24,7 @@ export type ShareVersion = {
   image_url: string;
   prompt_used: string | null;
   feedback: string | null;
+  products_used?: ProductPurchaseLink[] | null;
   created_at: string | null;
 };
 
@@ -38,6 +41,7 @@ export type ShareProjectData = {
   draft_prompt: string | null;
   room_image_url: string | null;
   versions: ShareVersion[];
+  products_used?: ProductPurchaseLink[] | null;
   prompt_history: SharePromptEntry[];
 };
 
@@ -232,6 +236,12 @@ export function SharePageClient({ initialData = null }: SharePageClientProps) {
                     </div>
                   )}
                 </div>
+              </section>
+            )}
+
+            {Array.isArray(data.products_used) && data.products_used.length > 0 && (
+              <section>
+                <MadeProductsList products={data.products_used} defaultExpanded={false} />
               </section>
             )}
 

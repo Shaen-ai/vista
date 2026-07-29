@@ -19,8 +19,8 @@ const LIVING_ROOM_SLOTS: RequiredSlot[] = [
   { family: "furniture", subtype: "sofa", quantity: 1 },
   { family: "furniture", subtype: "coffee_table", quantity: 1 },
   { family: "furniture", subtype: "tv_stand", quantity: 1 },
-  { family: "home_accessories", subtype: "vase", quantity: 1 },
-  { family: "home_accessories", subtype: "decorative_plant", quantity: 1 },
+  { family: "furniture", subtype: "vase", quantity: 1 },
+  { family: "furniture", subtype: "decorative_plant", quantity: 1 },
 ];
 
 const BEDROOM_SLOTS: RequiredSlot[] = [
@@ -29,7 +29,7 @@ const BEDROOM_SLOTS: RequiredSlot[] = [
   { family: "lighting", quantity: 1 },
   { family: "furniture", subtype: "bed", quantity: 1 },
   { family: "furniture", subtype: "wardrobe", quantity: 1 },
-  { family: "home_accessories", subtype: "decorative_plant", quantity: 1 },
+  { family: "furniture", subtype: "decorative_plant", quantity: 1 },
 ];
 
 const KITCHEN_SLOTS: RequiredSlot[] = [
@@ -37,7 +37,7 @@ const KITCHEN_SLOTS: RequiredSlot[] = [
   { family: "lighting", quantity: 1 },
   { family: "furniture", subtype: "table", quantity: 1 },
   { family: "furniture", subtype: "chair", quantity: 2 },
-  { family: "home_accessories", subtype: "vase", quantity: 1 },
+  { family: "furniture", subtype: "vase", quantity: 1 },
 ];
 
 const DINING_ROOM_SLOTS: RequiredSlot[] = [
@@ -45,7 +45,7 @@ const DINING_ROOM_SLOTS: RequiredSlot[] = [
   { family: "lighting", quantity: 1 },
   { family: "furniture", subtype: "dining_table", quantity: 1 },
   { family: "furniture", subtype: "chair", quantity: 4 },
-  { family: "home_accessories", subtype: "vase", quantity: 1 },
+  { family: "furniture", subtype: "vase", quantity: 1 },
 ];
 
 const BATHROOM_SLOTS: RequiredSlot[] = [
@@ -58,7 +58,7 @@ const HOME_OFFICE_SLOTS: RequiredSlot[] = [
   { family: "lighting", quantity: 1 },
   { family: "furniture", subtype: "desk", quantity: 1 },
   { family: "furniture", subtype: "chair", quantity: 1 },
-  { family: "home_accessories", subtype: "decorative_plant", quantity: 1 },
+  { family: "furniture", subtype: "decorative_plant", quantity: 1 },
 ];
 
 const CHILDRENS_ROOM_SLOTS: RequiredSlot[] = [
@@ -67,7 +67,7 @@ const CHILDRENS_ROOM_SLOTS: RequiredSlot[] = [
   { family: "lighting", quantity: 1 },
   { family: "furniture", subtype: "bed", quantity: 1 },
   { family: "furniture", subtype: "desk", quantity: 1 },
-  { family: "home_accessories", subtype: "decorative_plant", quantity: 1 },
+  { family: "furniture", subtype: "decorative_plant", quantity: 1 },
 ];
 
 const HALLWAY_SLOTS: RequiredSlot[] = [
@@ -82,7 +82,7 @@ const STUDIO_APARTMENT_SLOTS: RequiredSlot[] = [
   { family: "furniture", subtype: "sofa", quantity: 1 },
   { family: "furniture", subtype: "coffee_table", quantity: 1 },
   { family: "furniture", subtype: "bed", quantity: 1 },
-  { family: "home_accessories", subtype: "decorative_plant", quantity: 1 },
+  { family: "furniture", subtype: "decorative_plant", quantity: 1 },
 ];
 
 const OUTDOOR_PATIO_SLOTS: RequiredSlot[] = [
@@ -110,6 +110,75 @@ export function getRoomSlotTemplate(roomType: string, windowCount?: number | nul
   const canonical = normalizeRoomTypeValue(roomType);
   const template = ROOM_SLOT_TEMPLATES[canonical];
   const slots = template.map((s) => ({ ...s }));
+  if (windowCount != null && windowCount <= 0) {
+    return slots.filter((s) => s.family !== "window_treatments");
+  }
+  return slots;
+}
+
+/**
+ * Reduced Made-mode kits — flooring ALWAYS first, then the room's hero furniture,
+ * curtains last where they fit. Kept to <= 4 slots so Made mode surfaces at most
+ * 4 shoppable DB products (flooring + up to 3), never decor/lighting accessories.
+ * Deliberately furniture-focused: no lighting or home_accessories slots (those are
+ * what leaked lampshades/picture frames into the render).
+ */
+const MADE_ROOM_SLOT_TEMPLATES: Record<RoomType, RequiredSlot[]> = {
+  "living room": [
+    { family: "flooring", quantity: 1 },
+    { family: "furniture", subtype: "sofa", quantity: 1 },
+    { family: "furniture", subtype: "coffee_table", quantity: 1 },
+    { family: "window_treatments", subtype: "curtain", quantity: 1 },
+  ],
+  "studio apartment": [
+    { family: "flooring", quantity: 1 },
+    { family: "furniture", subtype: "sofa", quantity: 1 },
+    { family: "furniture", subtype: "coffee_table", quantity: 1 },
+    { family: "window_treatments", subtype: "curtain", quantity: 1 },
+  ],
+  bedroom: [
+    { family: "flooring", quantity: 1 },
+    { family: "furniture", subtype: "bed", quantity: 1 },
+    { family: "furniture", subtype: "wardrobe", quantity: 1 },
+    { family: "window_treatments", subtype: "curtain", quantity: 1 },
+  ],
+  "children's room": [
+    { family: "flooring", quantity: 1 },
+    { family: "furniture", subtype: "bed", quantity: 1 },
+    { family: "furniture", subtype: "wardrobe", quantity: 1 },
+    { family: "window_treatments", subtype: "curtain", quantity: 1 },
+  ],
+  kitchen: [
+    { family: "flooring", subtype: "tile", quantity: 1 },
+    { family: "furniture", subtype: "table", quantity: 1 },
+    { family: "furniture", subtype: "chair", quantity: 1 },
+    { family: "window_treatments", subtype: "curtain", quantity: 1 },
+  ],
+  "dining room": [
+    { family: "flooring", quantity: 1 },
+    { family: "furniture", subtype: "dining_table", quantity: 1 },
+    { family: "furniture", subtype: "chair", quantity: 1 },
+    { family: "window_treatments", subtype: "curtain", quantity: 1 },
+  ],
+  "home office": [
+    { family: "flooring", quantity: 1 },
+    { family: "furniture", subtype: "desk", quantity: 1 },
+    { family: "furniture", subtype: "chair", quantity: 1 },
+    { family: "window_treatments", subtype: "curtain", quantity: 1 },
+  ],
+  "outdoor patio": [
+    { family: "flooring", quantity: 1 },
+    { family: "furniture", subtype: "table", quantity: 1 },
+    { family: "furniture", subtype: "chair", quantity: 1 },
+  ],
+  hallway: [{ family: "flooring", quantity: 1 }],
+  bathroom: [{ family: "flooring", subtype: "tile", quantity: 1 }],
+};
+
+/** Reduced slot kit for Made mode — flooring always, plus room-appropriate hero furniture (<= 4 total). */
+export function getMadeModeRoomSlots(roomType: string, windowCount?: number | null): RequiredSlot[] {
+  const canonical = normalizeRoomTypeValue(roomType);
+  const slots = MADE_ROOM_SLOT_TEMPLATES[canonical].map((s) => ({ ...s }));
   if (windowCount != null && windowCount <= 0) {
     return slots.filter((s) => s.family !== "window_treatments");
   }

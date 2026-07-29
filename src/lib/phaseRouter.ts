@@ -179,8 +179,68 @@ export function filterSlotsForPhase(slots: RequiredSlot[], phase: DesignPhase): 
   });
 }
 
+/** Compact made flow: one furniture request covers furniture + decor slots. */
+export function filterSlotsForMadePhase(
+  slots: RequiredSlot[],
+  phase: DesignPhase,
+  compactProductFlow: boolean,
+): RequiredSlot[] {
+  if (compactProductFlow && phase === "furniture") {
+    return [
+      ...filterSlotsForPhase(slots, "furniture"),
+      ...filterSlotsForPhase(slots, "decor"),
+    ];
+  }
+  return filterSlotsForPhase(slots, phase);
+}
+
+export function productMatchesMadePhase(
+  item: CatalogItemSummary,
+  phase: DesignPhase,
+  compactProductFlow: boolean,
+): boolean {
+  const classified = classifyProductPhase(item);
+  if (compactProductFlow && phase === "furniture") {
+    return classified === "furniture" || classified === "decor";
+  }
+  return classified === phase;
+}
+
+/** Max catalog product reference images per Quick Room made Gemini request. */
+export const QUICK_ROOM_MADE_PRODUCTS_PER_STEP = 4;
+
 export const PHASE_PRODUCT_LIMITS: Record<DesignPhase, number> = {
   base: 4,
-  furniture: 5,
+  furniture: 4,
   decor: 4,
 };
+
+export function isFlooringCatalogKey(
+  mpKey: string,
+  catalogById: Map<string, CatalogItemSummary>,
+): boolean {
+  const row = catalogById.get(mpKey);
+  if (!row) return false;
+  const family = (row.product_family ?? "").toLowerCase();
+  if (family === "flooring") return true;
+  return classifyProductPhase(row) === "base" && family !== "furniture";
+}
+
+export function countNonFlooringCatalogProducts(
+  mpKeys: string[],
+  catalogById: Map<string, CatalogItemSummary>,
+): number {
+  return mpKeys.filter((k) => !isFlooringCatalogKey(k, catalogById)).length;
+}
+
+export function effectiveMadePhaseProductLimit(
+  phase: DesignPhase,
+  productsPerStep: number,
+  previousPhaseProducts: string[],
+  catalogById: Map<string, CatalogItemSummary>,
+): number {
+  const phaseCap = Math.min(PHASE_PRODUCT_LIMITS[phase], productsPerStep);
+  const placed = countNonFlooringCatalogProducts(previousPhaseProducts, catalogById);
+  const remaining = productsPerStep - placed;
+  return Math.max(0, Math.min(phaseCap, remaining));
+}

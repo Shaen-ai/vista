@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   excludeSlotsCoveredByUploads,
+  getMadeModeRoomSlots,
   getRoomSlotTemplate,
   mergeRoomSlots,
 } from "./roomSlotTemplates";
@@ -28,6 +29,100 @@ describe("getRoomSlotTemplate", () => {
     const slots = getRoomSlotTemplate("master bedroom");
     assert.ok(slots.some((s) => s.subtype === "bed"));
     assert.ok(slots.some((s) => s.subtype === "wardrobe"));
+  });
+});
+
+describe("getMadeModeRoomSlots", () => {
+  const ROOM_TYPES = [
+    "living room", "bedroom", "kitchen", "bathroom", "dining room",
+    "home office", "children's room", "hallway", "outdoor patio", "studio apartment",
+  ];
+
+  it("every room type: flooring always first and at most 4 slots", () => {
+    for (const room of ROOM_TYPES) {
+      const slots = getMadeModeRoomSlots(room, 2);
+      assert.ok(slots.length >= 1 && slots.length <= 4, `${room} should have 1-4 slots`);
+      assert.equal(slots[0]?.family, "flooring", `${room} first slot must be flooring`);
+      // Exactly one flooring slot (flooring is the always-present anchor).
+      assert.equal(slots.filter((s) => s.family === "flooring").length, 1, `${room} one flooring slot`);
+    }
+  });
+
+  it("never emits lighting or home_accessories slots (no lampshades / picture frames)", () => {
+    for (const room of ROOM_TYPES) {
+      const slots = getMadeModeRoomSlots(room, 2);
+      assert.ok(!slots.some((s) => s.family === "lighting"), `${room} has no lighting slot`);
+      assert.ok(!slots.some((s) => s.family === "home_accessories"), `${room} has no accessory slot`);
+    }
+  });
+
+  it("living room includes flooring, sofa, coffee_table, and curtain when windows present", () => {
+    const slots = getMadeModeRoomSlots("living room", 2);
+    const families = slots.map((s) => `${s.family}/${s.subtype ?? ""}`);
+    assert.deepEqual(families, [
+      "flooring/",
+      "furniture/sofa",
+      "furniture/coffee_table",
+      "window_treatments/curtain",
+    ]);
+  });
+
+  it("studio apartment uses living-like kit", () => {
+    const slots = getMadeModeRoomSlots("studio apartment", 1);
+    assert.ok(slots.some((s) => s.subtype === "sofa"));
+    assert.ok(slots.some((s) => s.subtype === "coffee_table"));
+  });
+
+  it("bedroom includes real bed and wardrobe", () => {
+    const slots = getMadeModeRoomSlots("bedroom", 2);
+    const families = slots.map((s) => `${s.family}/${s.subtype ?? ""}`);
+    assert.deepEqual(families, [
+      "flooring/",
+      "furniture/bed",
+      "furniture/wardrobe",
+      "window_treatments/curtain",
+    ]);
+  });
+
+  it("children's room includes bed and wardrobe", () => {
+    const slots = getMadeModeRoomSlots("children's room", 2);
+    assert.ok(slots.some((s) => s.subtype === "bed"));
+    assert.ok(slots.some((s) => s.subtype === "wardrobe"));
+  });
+
+  it("dining room includes a dining table and chair", () => {
+    const slots = getMadeModeRoomSlots("dining room", 2);
+    assert.ok(slots.some((s) => s.subtype === "dining_table"));
+    assert.ok(slots.some((s) => s.subtype === "chair"));
+  });
+
+  it("kitchen uses tile flooring plus table and chair", () => {
+    const slots = getMadeModeRoomSlots("kitchen", 2);
+    const flooring = slots.find((s) => s.family === "flooring");
+    assert.equal(flooring?.subtype, "tile");
+    assert.ok(slots.some((s) => s.subtype === "table"));
+    assert.ok(slots.some((s) => s.subtype === "chair"));
+  });
+
+  it("home office includes a desk and chair", () => {
+    const slots = getMadeModeRoomSlots("home office", 2);
+    assert.ok(slots.some((s) => s.subtype === "desk"));
+    assert.ok(slots.some((s) => s.subtype === "chair"));
+  });
+
+  it("hallway and bathroom are flooring only", () => {
+    for (const room of ["hallway", "bathroom"]) {
+      const slots = getMadeModeRoomSlots(room, 2);
+      assert.equal(slots.length, 1);
+      assert.equal(slots[0]?.family, "flooring");
+    }
+    assert.equal(getMadeModeRoomSlots("bathroom", 2)[0]?.subtype, "tile");
+  });
+
+  it("omits curtain when window count is zero", () => {
+    const slots = getMadeModeRoomSlots("living room", 0);
+    assert.ok(!slots.some((s) => s.family === "window_treatments"));
+    assert.equal(slots.length, 3);
   });
 });
 

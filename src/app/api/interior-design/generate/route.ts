@@ -38,6 +38,7 @@ import { acceptRenderWithPlacementRetry, buildFurnitureLabels } from "@/lib/plac
 import { buildSpendResponse, isDevSpendEnabled } from "@/lib/aiSpend";
 import { normalizeObjectRemovalMask } from "@/lib/normalizeObjectRemovalMask";
 import { pipelineLog } from "@/lib/pipelineLog";
+import { StepTimer } from "@/lib/generationDebug";
 import { PUBLIC_AI_SERVICE_UNAVAILABLE } from "@/lib/tunzoneAi";
 import {
   buildAiIncidentResponse,
@@ -56,6 +57,7 @@ import {
 import { resolveProductIntentsToIds } from "@/lib/resolveProductIntents";
 import {
   excludeSlotsCoveredByUploads,
+  getMadeModeRoomSlots,
   getRoomSlotTemplate,
   mergeRoomSlots,
 } from "@/lib/roomSlotTemplates";
@@ -75,7 +77,7 @@ import {
   traceCatalogPipeline,
   ProductFunnelTracer,
 } from "@/lib/catalogTrace";
-import { StepTimer } from "@/lib/generationDebug";
+import { resolveDesignModeForRequest } from "@/lib/designModeConfig";
 import { optimizeImageBufferForAi } from "@/lib/optimizeImageForAi";
 import { verifyProductAvailability } from "@/lib/verifyProductAvailability";
 import { orderMerchantBlockIds } from "./_lib/merchantBlock";
@@ -170,7 +172,9 @@ async function handleQuickRoomPost(request: NextRequest) {
     const quickRoomMode = quickRoomModeRaw === "true" || quickRoomModeRaw === "1";
     // "custom" (default) = free imaginary render with NO catalog tie (no product
     // matching, no product cards). "made" keeps the existing real-catalog behavior.
-    const isCustomMode = String(formData.get("designMode") ?? "custom").trim() === "custom";
+    const isCustomMode =
+      resolveDesignModeForRequest(String(formData.get("designMode") ?? "custom"), countryCode, searchMode) ===
+      "custom";
     const placementMode = parseQuickRoomPlacementMode(formData.get("placementMode"));
     const isPlaceOnly = placementMode === "placeOnly";
     const localModeRequested = isArmeniaLocalScrapedExclusive(countryCode, searchMode);
@@ -592,13 +596,15 @@ STRUCTURED FIELD CONSTRAINT: Populate "product_intents" where helpful. Populate 
             placement: i.placement,
           }));
     const catalogResolutionSlots = excludeSlotsCoveredByUploads(
-      filterSlotsForRoomType(
-        mergeRoomSlots({
-          template: getRoomSlotTemplate(effectiveRoomType, windowCountForSlots),
-          extras: claudeExtras,
-        }),
-        effectiveRoomType,
-      ),
+      !isCustomMode
+        ? getMadeModeRoomSlots(effectiveRoomType, windowCountForSlots)
+        : filterSlotsForRoomType(
+            mergeRoomSlots({
+              template: getRoomSlotTemplate(effectiveRoomType, windowCountForSlots),
+              extras: claudeExtras,
+            }),
+            effectiveRoomType,
+          ),
       inspirationItems.length > 0 ? uploadSlotDefs : [],
     );
 

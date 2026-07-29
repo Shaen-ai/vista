@@ -15,6 +15,7 @@ import type { ProductPurchaseLink } from "@/lib/productPurchaseLinks";
 import { buildVisionCandidateMpKeys } from "@/lib/identifyRenderProducts";
 import { numericIdsFromMpKeys } from "@/lib/scrapedRoomGeneration";
 import { traceCatalogPipeline, ProductFunnelTracer } from "@/lib/catalogTrace";
+import { resolveDesignModeForRequest } from "@/lib/designModeConfig";
 import type { StepTimer } from "@/lib/generationDebug";
 import { debugIngest } from "@/lib/debugIngest";
 import { pipelineLog } from "@/lib/pipelineLog";
@@ -74,7 +75,11 @@ export async function runQuickRoomRenderPhase(opts: {
     (process.env.INTERIOR_DESIGN_ADMIN_SLUG || "").trim() ||
     (process.env.NEXT_PUBLIC_INTERIOR_ADMIN_SLUG || "").trim() ||
     "demo";
-  const isCustomMode = String(formData.get("designMode") ?? "custom").trim() === "custom";
+  const countryCode = String(formData.get("countryCode") ?? "").trim();
+  const searchMode = String(formData.get("searchMode") ?? "").trim();
+  const isCustomMode =
+    resolveDesignModeForRequest(String(formData.get("designMode") ?? "custom"), countryCode, searchMode) ===
+    "custom";
 
   const tokenActionRaw = String(formData.get("tokenAction") ?? "generate").trim();
   const tokenAction =
@@ -294,6 +299,41 @@ export async function runQuickRoomRenderPhase(opts: {
 
     timer.mark("gallery_edit_pipeline", { ok: true });
 
+    const galleryRenderIsCustomMode = renderSession.isCustomMode ?? isCustomMode;
+    let galleryProductLinks: ProductPurchaseLink[] | undefined;
+    let galleryUsedCatalogIds: string[] = [];
+    if (!galleryRenderIsCustomMode && selectedForGemini.length > 0) {
+      const catalogIdsForFetch = [
+        ...new Set([...numericIdsFromMpKeys(selectedForGemini), ...sessionBoardIds]),
+      ];
+      const catalogRows =
+        catalogIdsForFetch.length > 0
+          ? await fetchMarketplaceProductsAsCatalog(catalogIdsForFetch)
+          : [];
+      const catalogById = new Map(catalogRows.map((row) => [row.id, row]));
+      const pinnedMpKeys = sessionBoardIds.map((id) => `mp-${id}`);
+      const flooringSlotIds = extractFlooringSlotIds(undefined, catalogById, selectedForGemini);
+      try {
+        const rendered = await buildRenderProductLinks({
+          selectedForGemini,
+          collageIncludedIds: selectedForGemini,
+          catalogById,
+          pinnedMpKeys,
+          brief,
+          finalImageBase64: galleryResult.base64,
+          finalImageMimeType: galleryResult.mimeType,
+          flooringSlotIds,
+          tracePhase: "gallery-edit",
+        });
+        if (rendered.productLinks.length > 0) {
+          galleryProductLinks = rendered.productLinks;
+          galleryUsedCatalogIds = rendered.usedCatalogIds;
+        }
+      } catch (linksErr) {
+        console.warn("buildRenderProductLinks failed (gallery edit continues):", linksErr);
+      }
+    }
+
     const tokenGate = await consumeTokensServer(tokenAction, headers);
     timer.mark("token_consume", { ok: tokenGate.ok });
     if (!tokenGate.ok) {
@@ -318,7 +358,7 @@ export async function runQuickRoomRenderPhase(opts: {
           designBrief: brief,
           scrapedInventoryExclusive,
           selectedCatalogIds: selectedForGemini,
-          usedCatalogIds: [],
+          usedCatalogIds: galleryUsedCatalogIds,
           plannedCatalogIds: plannedCatalogIds.length > 0 ? plannedCatalogIds : selectedForGemini,
           images: [
             {
@@ -328,12 +368,14 @@ export async function runQuickRoomRenderPhase(opts: {
               prompt: brief.fullPrompt || editFeedbackText,
             },
           ],
+          ...(galleryProductLinks?.length ? { productLinks: galleryProductLinks } : {}),
         },
         adminSlug: sessionAdminSlug || adminSlug,
         debug: timer.finish("render", {
           ok: true,
           galleryEdit: true,
           selectedCatalogCount: selectedForGemini.length,
+          productLinkCount: galleryProductLinks?.length ?? 0,
           scrapedInventoryExclusive,
         }),
         ...(isDevSpendEnabled() ? { spend: buildSpendResponse() } : {}),

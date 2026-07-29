@@ -31,10 +31,11 @@ import {
   isOverloadedAiError,
   reportOverloadedIncident,
 } from "@/lib/aiIncident";
-import { createSseEmitter, isStreamClosedError } from "@/lib/sseStream";
+import { resolveDesignMode, designModeCatalogFromPreferences } from "@/lib/designModeConfig";
 import { resolveProjectTokenAction } from "@/lib/project/projectTokenAction";
 import { checkTokensServer, consumeTokensServer } from "@/lib/serverVistaTokens";
 import { withRequestUploadUser } from "@/lib/uploadUserContext";
+import { createSseEmitter, isStreamClosedError } from "@/lib/sseStream";
 
 export const maxDuration = 900;
 
@@ -183,9 +184,14 @@ export async function POST(
             body.editAnnotation.base64.length > 0
               ? body.editAnnotation
               : undefined;
+          const rawDesignMode =
+            body.designMode === "made" || body.designMode === "custom" ? body.designMode : undefined;
+          const resolvedDesignMode = resolveDesignMode(
+            rawDesignMode ?? project.preferences.designMode,
+            designModeCatalogFromPreferences(project.preferences),
+          );
           await generateRoomPhase(id, roomId, targetPhase, feedback, (event) => send(event), {
-            designMode:
-              body.designMode === "made" || body.designMode === "custom" ? body.designMode : undefined,
+            designMode: resolvedDesignMode,
             editAnnotation,
             photoId: body.photoId,
             roomAction:

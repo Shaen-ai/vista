@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
 import {
@@ -29,6 +30,18 @@ export function QuickRoomResultOverlay({
   footer?: React.ReactNode;
 }) {
   const { t } = useTranslation();
+
+  useEffect(() => {
+    if (!open) return;
+    const prevBody = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevBody;
+      document.documentElement.style.overflow = prevHtml;
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -63,8 +76,17 @@ export function QuickRoomResultOverlay({
           </div>
         ) : isLoading && !children ? (
           <QuickRoomGenerationLoader phase={loaderPhase} />
-        ) : (
+        ) : children ? (
           children
+        ) : (
+          <div className="cd-result-error">
+            <p>{t("page.resultNotReady")}</p>
+            {onRetry && (
+              <button type="button" onClick={onRetry} className="cd-result-retry-btn">
+                {t("common.retry")}
+              </button>
+            )}
+          </div>
         )}
       </div>
 

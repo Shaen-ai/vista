@@ -24,7 +24,6 @@ import {
   Paperclip,
   Clock,
   Camera,
-  Home,
   Package,
   AlertCircle,
   PenTool,
@@ -90,18 +89,22 @@ const GenerationDebugPanel = dynamic(
   { ssr: false },
 );
 import { isArmeniaLocalScrapedExclusive } from "@/lib/scrapedAllowlist";
+import { resolveDesignMode } from "@/lib/designModeConfig";
+import { QUICK_ROOM_MADE_PRODUCTS_PER_STEP } from "@/lib/phaseRouter";
 import { hasLocalProductCatalog } from "@/lib/catalogCountryCapabilities";
 import { analyzeAndRedesign, runPhasedGeneration, runQuickRoomRender } from "@/lib/analyzeAndRedesign";
+import { buildPhasedFinalViews, shouldShowPhasedGallery } from "@/lib/quickRoom/finalViews";
 import { QuickRoomResultOverlay } from "@/components/QuickRoomResultOverlay";
+import { MadeProductsList } from "@/components/MadeProductsList";
+import { formatAmdPrice } from "@/lib/formatAmdPrice";
 import type { QuickRoomLoaderPhase } from "@/components/QuickRoomGenerationLoader";
 import type { GenerationClientTrace } from "@/lib/generationDebug";
-import { catalogCategorySortKey, PRODUCT_DISPLAY_BAND } from "@/lib/productDisplayOrder";
 import {
   ROOM_TYPES,
 } from "@/lib/interiorDesignPrompts";
 import { formatApiErrorMessage } from "@/lib/apiError";
 import { TokenInsufficientError } from "@/lib/tokenErrors";
-import { CloudflareSecurityChallengeError } from "@/lib/cloudflareChallenge";
+import { CloudflareSecurityChallengeError, isCloudflareSecurityChallengeError, throwIfCloudflareChallenge } from "@/lib/cloudflareChallenge";
 import { sanitizeUserFacingMessage } from "@/lib/userFacingMessages";
 import { track } from "@/lib/analytics";
 import {
@@ -111,6 +114,7 @@ import {
 import { SupportContactModal } from "@/components/SupportContactModal";
 import { PriceQuoteModal } from "@/components/PriceQuoteModal";
 import { ShareProjectModal } from "@/components/ShareProjectModal";
+import { ResultActionsMenu } from "@/components/ResultActionsMenu";
 import { LowBalancePrompt } from "@/components/LowBalancePrompt";
 import { useVistaUiTheme } from "@/app/VistaThemeProvider";
 import { VistaHeaderActions } from "@/components/VistaHeaderActions";
@@ -148,7 +152,6 @@ import {
   postFilterModalProducts,
   type CatalogModalFilter,
 } from "@/lib/catalogModalFilters";
-import { DesignPhaseStepper, PhaseApprovalBar, PhaseVersionNav } from "@/components/DesignPhaseStepper";
 import {
   classifyPinnedProductPhase,
   isDecorPhaseSkippableForStyle,
@@ -159,6 +162,8 @@ type GeneratePhase = "idle" | "analysing" | "designing" | "generating";
 
 function resolveGeneratePhase(msg: string): GeneratePhase {
   if (msg.includes("Analysing")) return "analysing";
+  if (msg.startsWith("Selecting")) return "designing";
+  if (msg.startsWith("Generating")) return "generating";
   if (msg.includes("Locking room structure") || msg.includes("Removing the marked")) {
     return "designing";
   }
@@ -170,6 +175,12 @@ function resolveGeneratePhase(msg: string): GeneratePhase {
     return "generating";
   }
   return "generating";
+}
+
+function advanceGeneratePhase(prev: GeneratePhase, msg: string): GeneratePhase {
+  const next = resolveGeneratePhase(msg);
+  const rank = { idle: 0, analysing: 1, designing: 2, generating: 3 } as const;
+  return rank[next] >= rank[prev] ? next : prev;
 }
 
 function extensionForImageMime(mimeType: string): string {
@@ -187,20 +198,6 @@ function downloadImageDataUrl(dataUrl: string, filename: string) {
   link.click();
   link.remove();
 }
-
-function formatAMD(price: number): string {
-  return price.toLocaleString("en-US") + " ֏";
-}
-
-const PRODUCT_BAND_I18N_KEYS: Record<number, string> = {
-  [PRODUCT_DISPLAY_BAND.flooring]: "page.productBandFlooring",
-  [PRODUCT_DISPLAY_BAND.walls]: "page.productBandWalls",
-  [PRODUCT_DISPLAY_BAND.windowTreatments]: "page.productBandWindowTreatments",
-  [PRODUCT_DISPLAY_BAND.lighting]: "page.productBandLighting",
-  [PRODUCT_DISPLAY_BAND.furniture]: "page.productBandFurniture",
-  [PRODUCT_DISPLAY_BAND.decor]: "page.productBandDecor",
-  [PRODUCT_DISPLAY_BAND.other]: "page.productBandOther",
-};
 
 function marketplaceBadge(source: string) {
   const s = source.toLowerCase();
@@ -351,11 +348,11 @@ function ProductCard({
         <div className="flex flex-col gap-2 mt-auto min-w-0">
           <div className="min-w-0">
             <span className="text-sm font-bold text-[var(--primary)] tabular-nums leading-tight truncate block">
-              {formatAMD(product.price)}
+              {formatAmdPrice(product.price)}
             </span>
             {product.old_price != null && product.old_price > product.price && (
               <span className="text-[10px] text-[var(--muted-foreground)] line-through tabular-nums">
-                {formatAMD(product.old_price)}
+                {formatAmdPrice(product.old_price)}
               </span>
             )}
           </div>
@@ -394,10 +391,10 @@ function SelectedProductChip({
           {product.name_en || product.name}
         </p>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
-          <p className="text-xs font-bold text-[var(--primary)] tabular-nums">{formatAMD(product.price)}</p>
+          <p className="text-xs font-bold text-[var(--primary)] tabular-nums">{formatAmdPrice(product.price)}</p>
           {product.old_price != null && product.old_price > product.price && (
             <p className="text-[10px] text-[var(--muted-foreground)] line-through tabular-nums">
-              {formatAMD(product.old_price)}
+              {formatAmdPrice(product.old_price)}
             </p>
           )}
           {product.external_url && (
@@ -1104,6 +1101,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setSelectedQuickRoomType,
     setTextPrompt,
     setSelectedStyle,
+    setDesignMode,
     setPlacementMode,
     setShapeCreativity,
     setQuickRoomView,
@@ -1113,7 +1111,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     restoreDesignVersion,
     lastRoomGeometry,
     lastGeometryExtractionFailed,
+    quickRoomAnalysis,
     setLastRoomGeometry,
+    setQuickRoomAnalysis,
     setIsGenerating,
     setError,
     setProductLinks,
@@ -1147,6 +1147,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setPhasedAllProductLinks,
     setPhasedAllProductIds,
     setPhasedFinalViews,
+    clearPhasedFinalViews,
     removePhasedFinalView,
     setPhasedError,
     resetPhasedDesign,
@@ -1201,8 +1202,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const selectedProductsListRef = useRef<HTMLDivElement>(null);
   const prevSelectedCountRef = useRef(0);
   const sidebarPreloadedRef = useRef(false);
+  const generationRunRef = useRef(0);
   const isWorkspace = variant !== "landing";
   const catalogAvailable = hasLocalProductCatalog(selectedCountry, searchMode);
+  const designModeCatalog = useMemo(
+    () => ({ countryCode: selectedCountry, searchMode }),
+    [selectedCountry, searchMode],
+  );
+  const resolvedDesignMode = resolveDesignMode(designMode, designModeCatalog);
   /** Catalog sidebar search/preload runs only in Quick Room when a local catalog exists. */
   const catalogSidebarEnabled = variant === "quick-workspace" && catalogAvailable;
   const [showLanding, setShowLanding] = useState(variant === "landing");
@@ -1408,7 +1415,6 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   }, [setTokenBalance, refreshTokenBalance]);
   const [generatePhase, setGeneratePhase] = useState<GeneratePhase>("idle");
   const [generationDebug, setGenerationDebug] = useState<GenerationClientTrace | null>(null);
-  const [phasedProgressText, setPhasedProgressText] = useState("");
 
   const generatePhaseMessage =
     generatePhase === "analysing"
@@ -1420,11 +1426,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           : "";
 
   const generateButtonLoadingMessage =
-    phasedDesignActive && isGenerating && phasedProgressText
-      ? phasedProgressText
-      : phasedDesignActive && isGenerating
-        ? t("page.generatingDesign")
-        : generatePhaseMessage;
+    isGenerating
+      ? generatePhaseMessage || t("page.generatingDesign")
+      : generatePhaseMessage;
 
   useEffect(() => {
     setObjectRemovalMask(null);
@@ -1765,6 +1769,13 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
   useEffect(() => {
     if (catalogAvailable) return;
+    if (useConsumerDesignStore.getState().designMode === "made") {
+      useConsumerDesignStore.getState().setDesignMode("custom");
+    }
+  }, [catalogAvailable, selectedCountry, searchMode]);
+
+  useEffect(() => {
+    if (catalogAvailable) return;
     const store = useConsumerDesignStore.getState();
     if (store.selectedProducts.length > 0) {
       useConsumerDesignStore.setState({ selectedProducts: [] });
@@ -1836,7 +1847,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     inspirationProducts.length > 0 || selectedProducts.length > 0;
 
   const needsRoomPhotoForGenerate =
-    designMode === "made" || placementMode === "placeOnly";
+    resolvedDesignMode === "made" || placementMode === "placeOnly";
 
   const generateFormReady =
     !isGenerating &&
@@ -1852,6 +1863,23 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     [selectedProducts],
   );
   const phase3Skippable = !userHasDecorPins && isDecorPhaseSkippableForStyle(selectedStyle);
+
+  const madeCompactProductFlow = useMemo(
+    () =>
+      resolvedDesignMode === "made"
+      && selectedProducts.length <= QUICK_ROOM_MADE_PRODUCTS_PER_STEP,
+    [resolvedDesignMode, selectedProducts.length],
+  );
+
+  const appendMadePhasedFormFields = useCallback((form: FormData) => {
+    form.set("madeMode", "true");
+    form.set("compactProductFlow", madeCompactProductFlow ? "true" : "false");
+    form.set("productsPerStep", String(QUICK_ROOM_MADE_PRODUCTS_PER_STEP));
+    form.set("shapeCreativity", String(shapeCreativity));
+    const analysis = useConsumerDesignStore.getState().quickRoomAnalysis ?? quickRoomAnalysis;
+    if (analysis) form.set("roomAnalysis", JSON.stringify(analysis));
+    if (lastRoomGeometry) form.set("roomGeometry", JSON.stringify(lastRoomGeometry));
+  }, [madeCompactProductFlow, lastRoomGeometry, quickRoomAnalysis, shapeCreativity]);
 
   const handleGenerate = useCallback(async (opts?: {
     promptOverride?: string;
@@ -1879,6 +1907,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     }
     const generateStartedAt = Date.now();
     track("design_generate_started", { mode: "quick", token_action: tokenAction });
+    const runId = ++generationRunRef.current;
 
     await ensureProject();
 
@@ -1893,6 +1922,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       });
     }
 
+    clearPhasedFinalViews();
     setIsGenerating(true);
     setGeneratePhase(opts?.galleryEdit ? "generating" : "analysing");
     setError(null);
@@ -1900,7 +1930,16 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     if (!opts?.galleryEdit) {
       setDesignBrief(null);
     }
-    setProductLinks([]);
+    const isMadeRegenerateOrEdit =
+      resolvedDesignMode === "made" && (tokenAction !== "generate" || !!opts?.galleryEdit);
+    const preGenerateStore = useConsumerDesignStore.getState();
+    const previousProductLinks =
+      preGenerateStore.productLinks.length > 0
+        ? preGenerateStore.productLinks
+        : preGenerateStore.phasedAllProductLinks;
+    if (!isMadeRegenerateOrEdit) {
+      setProductLinks([]);
+    }
     setUsedScrapedProducts([]);
 
     try {
@@ -1909,14 +1948,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         roomBlob = await fetch(`data:${imgMime};base64,${imgB64}`).then((r) => r.blob());
       }
 
-      const isCustom = designMode === "custom";
+      const isCustom = resolvedDesignMode === "custom";
       const buildGenerateFormData = async () => {
         const form = new FormData();
         form.set("textPrompt", prompt);
         form.set("style", selectedStyle);
         form.set("countryCode", selectedCountry);
         form.set("searchMode", searchMode);
-        form.set("designMode", designMode);
+        form.set("designMode", resolvedDesignMode);
         form.set("placementMode", placementMode);
         if (isCustom) {
           form.set("shapeCreativity", String(shapeCreativity));
@@ -2044,7 +2083,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       };
 
       const { authHeaders } = authContextForApi();
-      const generationResult = opts?.galleryEdit
+      const useCatalogRenderPath = !!opts?.galleryEdit || resolvedDesignMode === "made";
+      const generationResult = useCatalogRenderPath
         ? await analyzeAndRedesign({
             onPhase: (msg) => setGeneratePhase(resolveGeneratePhase(msg)),
             roomImageBlob: roomBlob ?? null,
@@ -2090,8 +2130,11 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       }
 
       const images = json.data?.images;
+      if (generationRunRef.current !== runId) return;
+
       if (images?.[0]) {
-        setGeneratedImage(images[0].base64 ?? null, images[0].mimeType ?? null);
+        setGeneratedImage(images[0].base64 ?? null, images[0].mimeType ?? "image/png");
+        clearPhasedFinalViews();
       }
       track("design_generate_succeeded", {
         mode: "quick",
@@ -2122,9 +2165,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         setLastRoomGeometry(returnedGeometry, returnedGeoFailed);
       }
 
-      if (json.data?.productLinks) {
-        setProductLinks(json.data.productLinks);
-      }
+      const incomingProductLinks = json.data?.productLinks;
+      const resolvedProductLinks =
+        incomingProductLinks && incomingProductLinks.length > 0
+          ? incomingProductLinks
+          : isMadeRegenerateOrEdit
+            ? previousProductLinks
+            : incomingProductLinks ?? [];
+      setProductLinks(resolvedProductLinks);
 
       const generatedBase64 = images?.[0]?.base64;
       const generatedMime = images?.[0]?.mimeType ?? "image/png";
@@ -2141,7 +2189,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
             prompt,
             feedback: opts?.feedbackText ?? null,
             designBrief: json.data?.designBrief ?? null,
-            productsUsed: json.data?.productLinks ?? null,
+            productsUsed: resolvedProductLinks.length > 0 ? resolvedProductLinks : null,
             roomGeometry: (returnedGeometry ?? null) as Record<string, unknown> | null,
             type: versionType,
           });
@@ -2188,6 +2236,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     textPrompt,
     selectedStyle,
     designMode,
+    resolvedDesignMode,
     roomImageBase64,
     roomImageMimeType,
     selectedQuickRoomType,
@@ -2213,6 +2262,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     setGeneratedImage,
     setDesignBrief,
     setProductLinks,
+    clearPhasedFinalViews,
     setLastRoomGeometry,
     tokenBalance,
     setTokenBalance,
@@ -2226,6 +2276,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     const prompt = designBrief?.fullPrompt || textPrompt.trim();
     if (!prompt) return;
     setQuickRoomView("result");
+    setGeneratePhase("analysing");
     handleGenerate({ promptOverride: prompt, tokenAction: "regenerate" });
   }, [designBrief, textPrompt, handleGenerate]);
 
@@ -2233,19 +2284,72 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
   const handleStartPhasedDesign = useCallback(async () => {
     if (!roomImageBase64 || !roomImageMimeType || isGenerating) return;
+    const runId = ++generationRunRef.current;
     track("design_generate_started", { mode: "phased", phase: "base" });
-    await ensureProject();
     startPhasedDesign();
+    setQuickRoomView("result");
     setIsGenerating(true);
+    setGeneratePhase("analysing");
     setError(null);
     setPhasedSlotNotices([]);
-    setPhasedProgressText("Selecting materials & lighting...");
+    setPhasedStatus("generating");
 
     try {
+      await ensureProject();
+      if (generationRunRef.current !== runId) return;
       const blob = await fetch(`data:${roomImageMimeType};base64,${roomImageBase64}`).then((r) => r.blob());
       const { authHeaders } = authContextForApi();
 
-      const buildForm = () => {
+      const storeSnapshot = useConsumerDesignStore.getState();
+      if (!storeSnapshot.lastRoomGeometry) {
+        try {
+          const geoForm = new FormData();
+          geoForm.set("roomImage", blob, "room.jpg");
+          const geoRes = await fetch("/api/interior-design/room-geometry", {
+            method: "POST",
+            body: geoForm,
+            headers: authHeaders,
+          });
+          const geoRaw = await geoRes.text();
+          throwIfCloudflareChallenge(geoRes, geoRaw);
+          const geoJson = JSON.parse(geoRaw) as { error?: string; data?: typeof storeSnapshot.lastRoomGeometry };
+          if (geoRes.ok && !geoJson.error && geoJson.data) {
+            setLastRoomGeometry(geoJson.data, false);
+          } else {
+            setLastRoomGeometry(null, true);
+          }
+        } catch (geoErr) {
+          if (isCloudflareSecurityChallengeError(geoErr)) throw geoErr;
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[vista:phased] room-geometry preflight failed:", geoErr);
+          }
+          setLastRoomGeometry(null, true);
+        }
+      }
+      if (!useConsumerDesignStore.getState().quickRoomAnalysis) {
+        try {
+          const analyzeForm = new FormData();
+          analyzeForm.set("roomImage", blob, "room.jpg");
+          const analyzeRes = await fetch("/api/interior-design/analyze", {
+            method: "POST",
+            body: analyzeForm,
+            headers: authHeaders,
+          });
+          const analyzeRaw = await analyzeRes.text();
+          throwIfCloudflareChallenge(analyzeRes, analyzeRaw);
+          const analyzeJson = JSON.parse(analyzeRaw) as { error?: string; data?: NonNullable<typeof quickRoomAnalysis> };
+          if (analyzeRes.ok && !analyzeJson.error && analyzeJson.data) {
+            setQuickRoomAnalysis(analyzeJson.data);
+          }
+        } catch (analyzeErr) {
+          if (isCloudflareSecurityChallengeError(analyzeErr)) throw analyzeErr;
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[vista:phased] room analyze preflight failed:", analyzeErr);
+          }
+        }
+      }
+
+      const buildForm = (tokenAction: string = "generate") => {
         const form = new FormData();
         form.set("textPrompt", textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT);
         form.set("style", selectedStyle);
@@ -2274,21 +2378,25 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         if (styleInspirations.length > 0) {
           appendStyleInspirationsToForm(form, styleInspirations);
         }
-        form.set("tokenAction", "generate");
+        appendMadePhasedFormFields(form);
+        form.set("tokenAction", tokenAction);
         return form;
       };
 
-      setPhasedStatus("generating");
+      const onPhaseProgress = (status: string) => {
+        setGeneratePhase((prev) => advanceGeneratePhase(prev, status));
+        if (status.startsWith("Selecting")) setPhasedStatus("selecting");
+        else if (status.startsWith("Generating")) setPhasedStatus("generating");
+      };
+
       const result = await runPhasedGeneration({
         phase: "base",
-        formData: buildForm(),
-        onProgress: (status) => {
-          setPhasedProgressText(status);
-          if (status.startsWith("Selecting")) setPhasedStatus("selecting");
-          else if (status.startsWith("Generating")) setPhasedStatus("generating");
-        },
+        formData: buildForm("generate"),
+        onProgress: onPhaseProgress,
+        useCosmeticLoaderGate: true,
         requestHeaders: authHeaders,
       });
+      if (generationRunRef.current !== runId) return;
 
       setPhaseResult("base", result.image, result.confirmedProducts);
       const basePersist = await persistGeneratedVersion({
@@ -2311,14 +2419,14 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       if (typeof result.balance === "number") setTokenBalance(result.balance);
 
       // Fire off parallel base-phase generation for each extra photo (background).
-      const snapshot = useConsumerDesignStore.getState();
+      let snapshot = useConsumerDesignStore.getState();
       const extras = snapshot.quickRoomExtraPhotos ?? [];
       if (extras.length > 0) {
         void Promise.allSettled(
           extras.map(async (photo) => {
             try {
               const extraBlob = await fetch(`data:${photo.mimeType};base64,${photo.base64}`).then((r) => r.blob());
-              const form = buildForm();
+              const form = buildForm("none");
               form.set("roomImage", extraBlob, "room.jpg");
               const extraResult = await runPhasedGeneration({
                 phase: "base",
@@ -2346,10 +2454,164 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
           }),
         );
       }
+
+      const followUpPhases: DesignPhase[] = madeCompactProductFlow
+        ? ["furniture"]
+        : ["furniture", "decor"];
+
+      for (const nextPhase of followUpPhases) {
+        const currentPhase: DesignPhase = nextPhase === "furniture" ? "base" : "furniture";
+        approvePhase(currentPhase);
+        setPhasedPhase(nextPhase);
+        setPhasedStatus("generating");
+        track("design_generate_started", { mode: "phased", phase: nextPhase });
+
+        snapshot = useConsumerDesignStore.getState();
+        const previousImage = getSelectedPhaseImage(snapshot, currentPhase);
+        if (!previousImage) throw new Error("No previous phase image available.");
+
+        const prevBlob = await fetch(
+          `data:${previousImage.mimeType};base64,${previousImage.base64}`,
+        ).then((r) => r.blob());
+
+        const previousProducts = currentPhase === "base"
+          ? getSelectedPhaseProducts(snapshot, "base")
+          : [
+              ...getSelectedPhaseProducts(snapshot, "base"),
+              ...getSelectedPhaseProducts(snapshot, "furniture"),
+            ];
+
+        const phaseResult = await runPhasedGeneration({
+          phase: nextPhase,
+          formData: buildForm("none"),
+          previousPhaseImage: prevBlob,
+          previousPhaseProducts: previousProducts,
+          onProgress: onPhaseProgress,
+          useCosmeticLoaderGate: false,
+          requestHeaders: authHeaders,
+        });
+        if (generationRunRef.current !== runId) return;
+
+        setPhaseResult(nextPhase, phaseResult.image, phaseResult.confirmedProducts);
+        const phasePersist = await persistGeneratedVersion({
+          base64: phaseResult.image.base64,
+          mimeType: phaseResult.image.mimeType,
+          prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+          productsUsed: phaseResult.productLinks ?? null,
+          type: "phased",
+          phase: nextPhase,
+        });
+        if (!phasePersist.ok && phasePersist.reason !== "not_authenticated") {
+          setError(t("page.designPersistFailed"));
+        }
+        track("design_generate_succeeded", { mode: "phased", phase: nextPhase });
+        setPhasedAllProductLinks(phaseResult.productLinks);
+        setPhasedAllProductIds(phaseResult.allPhaseProductIds);
+        if (phaseResult.imaginedSlots?.length) {
+          const notices = phaseResult.imaginedSlots.map((s) => t("page.slotNoticeImagined", { label: s.label }));
+          setPhasedSlotNotices((prev) => [...new Set([...prev, ...notices])]);
+        }
+        if (typeof phaseResult.balance === "number") setTokenBalance(phaseResult.balance);
+
+        const tracks = snapshot.viewpointTracks ?? {};
+        if (extras.length > 0) {
+          void Promise.allSettled(
+            extras.map(async (photo) => {
+              try {
+                const track = tracks[photo.id];
+                const fieldMap = { base: "phase1", furniture: "phase2", decor: "phase3" } as const;
+                const prevField = fieldMap[currentPhase];
+                const prevVersions = track?.[`${prevField}Versions` as const];
+                const prevIdx = track?.[`${prevField}SelectedIndex` as const] ?? 0;
+                const prevTrackImg = prevVersions?.[prevIdx]?.image;
+                if (!prevTrackImg) return;
+                const extraPrevBlob = await fetch(
+                  `data:${prevTrackImg.mimeType};base64,${prevTrackImg.base64}`,
+                ).then((r) => r.blob());
+                const extraRoomBlob = await fetch(
+                  `data:${photo.mimeType};base64,${photo.base64}`,
+                ).then((r) => r.blob());
+                const extraForm = buildForm("none");
+                extraForm.set("roomImage", extraRoomBlob, "room.jpg");
+                const extraResult = await runPhasedGeneration({
+                  phase: nextPhase,
+                  formData: extraForm,
+                  previousPhaseImage: extraPrevBlob,
+                  previousPhaseProducts: previousProducts,
+                  onProgress: () => {},
+                  requestHeaders: authHeaders,
+                });
+                setViewpointTrackResult(photo.id, nextPhase, {
+                  id: `pv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                  image: extraResult.image,
+                  products: extraResult.confirmedProducts,
+                  timestamp: Date.now(),
+                });
+                void persistGeneratedVersion({
+                  base64: extraResult.image.base64,
+                  mimeType: extraResult.image.mimeType,
+                  prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+                  type: "viewpoint",
+                  phase: nextPhase,
+                  viewpointId: photo.id,
+                });
+              } catch (err) {
+                console.warn(`Extra viewpoint ${nextPhase} generation failed for ${photo.id}:`, err);
+              }
+            }),
+          );
+        }
+      }
+
+      approvePhase(followUpPhases[followUpPhases.length - 1] ?? "base");
+      snapshot = useConsumerDesignStore.getState();
+      const finalImage =
+        getSelectedPhaseImage(snapshot, "decor")
+        ?? getSelectedPhaseImage(snapshot, "furniture")
+        ?? getSelectedPhaseImage(snapshot, "base");
+      if (finalImage) {
+        if (generationRunRef.current !== runId) return;
+        setGeneratedImage(finalImage.base64, finalImage.mimeType ?? "image/png");
+        const latestLinks = useConsumerDesignStore.getState().phasedAllProductLinks;
+        setProductLinks(latestLinks);
+        setPhasedPhase("complete");
+        try {
+          const persistResult = await persistGeneratedVersion({
+            base64: finalImage.base64,
+            mimeType: finalImage.mimeType ?? "image/png",
+            prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
+            productsUsed: latestLinks as unknown[] | null,
+            type: "generated",
+          });
+          if (!persistResult.ok && persistResult.reason !== "not_authenticated") {
+            setError(t("page.designPersistFailed"));
+          }
+        } catch (persistErr) {
+          console.warn("[vista:phased] failed to persist final design version:", persistErr);
+          setError(t("page.designPersistFailed"));
+        }
+        setQuickRoomView("result");
+
+        const extraPhotos = snapshot.quickRoomExtraPhotos ?? [];
+        const tracks = snapshot.viewpointTracks ?? {};
+        const finalViews = buildPhasedFinalViews({
+          primary: { base64: finalImage.base64, mimeType: finalImage.mimeType ?? "image/png" },
+          extraPhotos,
+          tracks,
+          compactFlow: madeCompactProductFlow,
+        });
+        if (finalViews.length > 0) {
+          setPhasedFinalViews(finalViews);
+        } else {
+          clearPhasedFinalViews();
+        }
+        track("design_generate_succeeded", { mode: "phased", phase: "complete" });
+      }
     } catch (err) {
+      if (generationRunRef.current !== runId) return;
       track("design_generate_failed", {
         mode: "phased",
-        phase: "base",
+        phase: "pipeline",
         error_message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
       });
       if (openSupportModalForAiError(err)) return;
@@ -2362,17 +2624,19 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         setPhasedError(t("tokens.insufficientBalance", { cost: err.required, balance: err.balance }));
         return;
       }
-      setPhasedError(err instanceof Error ? err.message : "Phase 1 generation failed.");
+      setPhasedError(err instanceof Error ? err.message : "Design generation failed.");
     } finally {
       setIsGenerating(false);
-      setPhasedProgressText("");
+      setGeneratePhase("idle");
     }
   }, [
     roomImageBase64, roomImageMimeType, textPrompt, isGenerating, selectedStyle,
     selectedCountry, searchMode, selectedQuickRoomType, selectedProducts, searchResults,
-    inspirationProducts, styleInspirations, startPhasedDesign, setIsGenerating, setError, setPhasedStatus,
+    inspirationProducts, styleInspirations, designBrief, startPhasedDesign, setIsGenerating, setError, setPhasedStatus,
     setPhaseResult, setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedError, setTokenBalance,
-    setViewpointTrackResult, ensureProject, persistGeneratedVersion, t,
+    setViewpointTrackResult, ensureProject, persistGeneratedVersion, t, appendMadePhasedFormFields,
+    approvePhase, setPhasedPhase, madeCompactProductFlow, setGeneratedImage, setProductLinks, setPhasedFinalViews, clearPhasedFinalViews, setQuickRoomView,
+    setQuickRoomAnalysis, shapeCreativity,
   ]);
 
   const handleGenerateClick = useCallback(async () => {
@@ -2386,12 +2650,18 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
     setQuickRoomView("result");
     setError(null);
-    void handleGenerate({ tokenAction: "generate" });
+    if (resolvedDesignMode === "made") {
+      void handleStartPhasedDesign();
+    } else {
+      void handleGenerate({ tokenAction: "generate" });
+    }
   }, [
     generateFormReady,
     handleGenerate,
+    handleStartPhasedDesign,
     insufficientTokensForGenerate,
     isGenerating,
+    resolvedDesignMode,
   ]);
 
   const handleApprovePhase = useCallback(async () => {
@@ -2404,23 +2674,25 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     const approvedImage = getSelectedPhaseImage(snapshot, currentPhase);
 
     let nextPhase: DesignPhase;
-    if (currentPhase === "base") nextPhase = "furniture";
-    else if (currentPhase === "furniture") nextPhase = "decor";
-    else {
+    const finishingCompactFurniture =
+      currentPhase === "furniture" && madeCompactProductFlow;
+
+    if (currentPhase === "decor" || finishingCompactFurniture) {
       const finalImage =
         approvedImage
         ?? getSelectedPhaseImage(snapshot, "decor")
         ?? getSelectedPhaseImage(snapshot, "furniture")
         ?? getSelectedPhaseImage(snapshot, "base");
       if (finalImage) {
-        setGeneratedImage(finalImage.base64, finalImage.mimeType);
-        setProductLinks(phasedAllProductLinks);
+        setGeneratedImage(finalImage.base64, finalImage.mimeType ?? "image/png");
+        const latestLinks = useConsumerDesignStore.getState().phasedAllProductLinks;
+        setProductLinks(latestLinks);
         try {
           const persistResult = await persistGeneratedVersion({
             base64: finalImage.base64,
-            mimeType: finalImage.mimeType,
+            mimeType: finalImage.mimeType ?? "image/png",
             prompt: textPrompt.trim() || DEFAULT_QUICK_ROOM_PROMPT,
-            productsUsed: phasedAllProductLinks as unknown[] | null,
+            productsUsed: latestLinks as unknown[] | null,
             type: "generated",
           });
           if (!persistResult.ok && persistResult.reason !== "not_authenticated") {
@@ -2435,40 +2707,30 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       setPhasedPhase("complete");
       track("design_generate_succeeded", { mode: "phased", phase: "complete" });
 
-      // Assemble final views from per-viewpoint tracks — each track has its own
-      // fully phased pipeline, so no re-shoot needed. Primary comes from the main
-      // phase state; extras come from viewpointTracks.
       const extraPhotos = snapshot.quickRoomExtraPhotos ?? [];
       const tracks = snapshot.viewpointTracks ?? {};
-      if (finalImage && extraPhotos.length > 0 && Object.keys(tracks).length > 0) {
-        const primaryView = {
-          id: `view-primary-${Date.now()}`,
-          base64: finalImage.base64,
-          mimeType: finalImage.mimeType,
-        };
-        const extraViews = extraPhotos
-          .map((photo, i) => {
-            const track = tracks[photo.id];
-            if (!track) return null;
-            const terminal =
-              track.phase3Versions[track.phase3SelectedIndex] ??
-              track.phase2Versions[track.phase2SelectedIndex] ??
-              track.phase1Versions[track.phase1SelectedIndex];
-            if (!terminal?.image) return null;
-            return {
-              id: `view-extra-${Date.now()}-${i}`,
-              base64: terminal.image.base64,
-              mimeType: terminal.image.mimeType,
-            };
-          })
-          .filter((v): v is NonNullable<typeof v> => v !== null);
-        setPhasedFinalViews([primaryView, ...extraViews]);
+      if (finalImage) {
+        const finalViews = buildPhasedFinalViews({
+          primary: { base64: finalImage.base64, mimeType: finalImage.mimeType ?? "image/png" },
+          extraPhotos,
+          tracks,
+          compactFlow: madeCompactProductFlow,
+        });
+        if (finalViews.length > 0) {
+          setPhasedFinalViews(finalViews);
+        } else {
+          clearPhasedFinalViews();
+        }
       }
       return;
     }
 
+    if (currentPhase === "base") nextPhase = "furniture";
+    else nextPhase = "decor";
+
     setPhasedPhase(nextPhase);
     setIsGenerating(true);
+    setGeneratePhase("analysing");
     setPhasedStatus("generating");
     track("design_generate_started", { mode: "phased", phase: nextPhase });
 
@@ -2510,6 +2772,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       if (styleInspirations.length > 0) {
         appendStyleInspirationsToForm(form, styleInspirations);
       }
+      appendMadePhasedFormFields(form);
       form.set("tokenAction", "none");
 
       const previousProducts = currentPhase === "base"
@@ -2524,7 +2787,12 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         formData: form,
         previousPhaseImage: prevBlob,
         previousPhaseProducts: previousProducts,
-        onProgress: () => {},
+        onProgress: (status) => {
+          setGeneratePhase((prev) => advanceGeneratePhase(prev, status));
+          if (status.startsWith("Selecting")) setPhasedStatus("selecting");
+          else if (status.startsWith("Generating")) setPhasedStatus("generating");
+        },
+        useCosmeticLoaderGate: true,
         requestHeaders: authHeaders,
       });
 
@@ -2574,6 +2842,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               extraForm.set("roomImage", extraRoomBlob, "room.jpg");
               extraForm.set("roomType", selectedQuickRoomType);
               extraForm.set("tokenAction", "none");
+              appendMadePhasedFormFields(extraForm);
               const extraResult = await runPhasedGeneration({
                 phase: nextPhase,
                 formData: extraForm,
@@ -2627,8 +2896,9 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     roomImageBase64, roomImageMimeType, textPrompt, selectedStyle, selectedCountry,
     searchMode, selectedQuickRoomType, lastRoomGeometry, selectedProducts, searchResults, inspirationProducts, styleInspirations,
     approvePhase, setIsGenerating, setPhasedPhase, setPhasedStatus, setPhaseResult,
-    setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedFinalViews, setPhasedError, setTokenBalance, setGeneratedImage, setProductLinks,
+    setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedFinalViews, clearPhasedFinalViews, setPhasedError, setTokenBalance, setGeneratedImage, setProductLinks,
     resetPhasedAnnotation, setViewpointTrackResult, persistGeneratedVersion, setQuickRoomView, t, setError,
+    madeCompactProductFlow, appendMadePhasedFormFields,
   ]);
 
   const handleRedoPhase = useCallback(async () => {
@@ -2637,6 +2907,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     const currentPhase = phasedCurrentPhase as DesignPhase;
     setPhasedStatus("generating");
     setIsGenerating(true);
+    setGeneratePhase("analysing");
 
     try {
       const snapshot = useConsumerDesignStore.getState();
@@ -2679,6 +2950,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       if (styleInspirations.length > 0) {
         appendStyleInspirationsToForm(form, styleInspirations);
       }
+      appendMadePhasedFormFields(form);
       form.set("tokenAction", "regenerate");
 
       const phase1Products = getSelectedPhaseProducts(snapshot, "base");
@@ -2692,7 +2964,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         formData: form,
         previousPhaseImage: prevBlob,
         previousPhaseProducts: currentPhase !== "base" ? previousProducts : undefined,
-        onProgress: () => {},
+        onProgress: (status) => setGeneratePhase((prev) => advanceGeneratePhase(prev, status)),
+        useCosmeticLoaderGate: true,
         requestHeaders: authHeaders,
       });
 
@@ -2735,7 +3008,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     roomImageBase64, roomImageMimeType, textPrompt, selectedStyle,
     selectedCountry, searchMode, selectedQuickRoomType, selectedProducts, inspirationProducts, styleInspirations,
     setIsGenerating, setPhasedStatus, setPhaseResult, setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedError, setTokenBalance,
-    resetPhasedAnnotation, persistGeneratedVersion, t, setError,
+    resetPhasedAnnotation, persistGeneratedVersion, t, setError, appendMadePhasedFormFields,
   ]);
 
   const handlePhaseEditSubmit = useCallback(async () => {
@@ -2747,6 +3020,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     const hasPhasedAnnotation = Boolean(annotatedBase64 && annotatedMimeType);
     setPhasedStatus("generating");
     setIsGenerating(true);
+    setGeneratePhase("analysing");
     setPhaseEditFeedback("");
     setPhaseEditOpen(false);
     resetPhasedAnnotation();
@@ -2805,6 +3079,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       if (styleInspirations.length > 0) {
         appendStyleInspirationsToForm(form, styleInspirations);
       }
+      appendMadePhasedFormFields(form);
       form.set("tokenAction", "edit");
 
       const phase1Products = getSelectedPhaseProducts(snapshot, "base");
@@ -2818,7 +3093,8 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
         formData: form,
         previousPhaseImage: prevBlob,
         previousPhaseProducts: currentPhase !== "base" ? previousProducts : undefined,
-        onProgress: () => {},
+        onProgress: (status) => setGeneratePhase((prev) => advanceGeneratePhase(prev, status)),
+        useCosmeticLoaderGate: true,
         requestHeaders: authHeaders,
       });
 
@@ -2862,7 +3138,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     roomImageBase64, roomImageMimeType, textPrompt, selectedStyle,
     selectedCountry, searchMode, selectedQuickRoomType, selectedProducts, inspirationProducts, styleInspirations,
     setIsGenerating, setPhasedStatus, setPhaseResult, setPhasedAllProductLinks, setPhasedAllProductIds, setPhasedError, setTokenBalance,
-    resetPhasedAnnotation, persistGeneratedVersion, t, setError,
+    resetPhasedAnnotation, persistGeneratedVersion, t, setError, appendMadePhasedFormFields, designBrief,
   ]);
 
   const handleSkipDecor = useCallback(() => {
@@ -2874,10 +3150,10 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
       ?? getSelectedPhaseImage(snapshot, "base");
     if (finalImage) {
       setGeneratedImage(finalImage.base64, finalImage.mimeType);
-      setProductLinks(phasedAllProductLinks);
+      setProductLinks(useConsumerDesignStore.getState().phasedAllProductLinks);
     }
     setPhasedPhase("complete");
-  }, [approvePhase, phasedAllProductLinks, phase3Skippable, setPhasedPhase, setGeneratedImage, setProductLinks]);
+  }, [approvePhase, phase3Skippable, setPhasedPhase, setGeneratedImage, setProductLinks]);
 
   const phasedVersionSnapshot = useMemo(
     () => ({
@@ -2927,19 +3203,44 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
   const showFinalResult = Boolean(
     generatedImageBase64
-    && generatedImageMimeType
-    && (!phasedDesignActive || phasedCurrentPhase === "complete"),
+    && (
+      !phasedDesignActive
+      || phasedCurrentPhase === "complete"
+      || (resolvedDesignMode === "made" && !isGenerating && quickRoomView === "result")
+    ),
   );
-  const showFinalResultInline = showFinalResult && designMode !== "custom";
-  const showCustomResultOverlay = designMode === "custom" && quickRoomView === "result";
-  const customResultLoading = showCustomResultOverlay && isGenerating && !generatedImageBase64;
-  const quickRoomLoaderPhase = (generatePhase === "idle" ? "analysing" : generatePhase) as QuickRoomLoaderPhase;
+  const generatedImageMime = generatedImageMimeType ?? "image/png";
+  const showPhasedGallery = shouldShowPhasedGallery(phasedFinalViews, quickRoomExtraPhotos.length);
+  const showResultOverlay = quickRoomView === "result";
+  const showFinalResultInline = showFinalResult && resolvedDesignMode !== "custom" && !showResultOverlay;
+  const quickRoomLoaderPhase = (
+    generatePhase === "idle" ? "analysing" : generatePhase
+  ) as QuickRoomLoaderPhase;
+
+  const handleResultOverlayBack = useCallback(() => {
+    if (isGenerating) {
+      generationRunRef.current += 1;
+      setIsGenerating(false);
+      setGeneratePhase("idle");
+      if (resolvedDesignMode === "made") {
+        resetPhasedDesign();
+      }
+    }
+    setQuickRoomView("compose");
+  }, [
+    isGenerating,
+    resolvedDesignMode,
+    resetPhasedDesign,
+    setQuickRoomView,
+    setIsGenerating,
+  ]);
 
   const handleDownloadGenerated = useCallback(() => {
-    if (!generatedImageBase64 || !generatedImageMimeType) return;
-    const ext = extensionForImageMime(generatedImageMimeType);
+    if (!generatedImageBase64) return;
+    const mime = generatedImageMimeType ?? "image/png";
+    const ext = extensionForImageMime(mime);
     downloadImageDataUrl(
-      `data:${generatedImageMimeType};base64,${generatedImageBase64}`,
+      `data:${mime};base64,${generatedImageBase64}`,
       `vista-interior-${Date.now()}.${ext}`,
     );
   }, [generatedImageBase64, generatedImageMimeType]);
@@ -3162,28 +3463,10 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
   const quickRoomResultPanel = showFinalResult ? (
     <div className="w-full flex flex-col gap-4">
-                {/* Room type & camera angle only — no long AI finish description */}
-                {designBrief && (designBrief.roomType || designBrief.cameraAngle) && (
-                  <div className="flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl bg-[var(--primary)]/5 border border-[var(--primary)]/20">
-                    {designBrief.roomType && (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--foreground)] bg-[var(--muted)] px-2.5 py-1 rounded-full">
-                        <Home size={12} className="text-[var(--primary)]" />
-                        {roomTypeLabel(designBrief.roomType)}
-                      </span>
-                    )}
-                    {designBrief.cameraAngle && (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--foreground)] bg-[var(--muted)] px-2.5 py-1 rounded-full">
-                        <Camera size={12} className="text-[var(--primary)]" />
-                        {designBrief.cameraAngle}
-                      </span>
-                    )}
-                  </div>
-                )}
-
                 {/* Generated images — compact grid when multiple angles, capped single hero otherwise */}
                 {markerMode ? (
                   <DrawingCanvas
-                    imageSrc={`data:${generatedImageMimeType};base64,${generatedImageBase64}`}
+                    imageSrc={`data:${generatedImageMime};base64,${generatedImageBase64}`}
                     onAnnotatedImage={(base64, mime) => {
                       setAnnotatedImageBase64(base64);
                       setAnnotatedImageMimeType(mime);
@@ -3191,7 +3474,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     onFinish={() => setMarkerMode(false)}
                     className="cd-reveal"
                   />
-                ) : phasedFinalViews.length > 1 ? (
+                ) : showPhasedGallery ? (
                   <RoomRenderGalleryGrid className="cd-reveal">
                     {phasedFinalViews.map((view, i) => {
                       const isActive = view.base64 === generatedImageBase64;
@@ -3227,11 +3510,11 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     className="cd-reveal rounded-2xl overflow-hidden border border-[var(--border)] cursor-pointer hover:shadow-lg transition-shadow relative"
                     onClick={() =>
                       !isGenerating &&
-                      setLightboxSrc(`data:${generatedImageMimeType};base64,${generatedImageBase64}`)
+                      setLightboxSrc(`data:${generatedImageMime};base64,${generatedImageBase64}`)
                     }
                   >
                     <img
-                      src={`data:${generatedImageMimeType};base64,${generatedImageBase64}`}
+                      src={`data:${generatedImageMime};base64,${generatedImageBase64}`}
                       alt={t("page.generatedInterior")}
                       className={`w-full max-h-[55vh] object-contain transition-opacity ${isGenerating ? "opacity-50" : ""}`}
                     />
@@ -3244,53 +3527,37 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                   </div>
                 )}
 
-                {/* Action buttons — Download is primary; regenerate/mark are secondary */}
-                <div className={`flex gap-3 ${isMobile ? "flex-col" : ""}`}>
+                {resolvedDesignMode === "made" && (
+                  <MadeProductsList
+                    products={productLinks}
+                    defaultExpanded={false}
+                    isMobile={isMobile}
+                  />
+                )}
+
+                {/* Action buttons — Save is primary; secondary actions live in More menu */}
+                {resolvedDesignMode === "made" && (
                   <button
                     type="button"
-                    onClick={handleDownloadGenerated}
-                    disabled={isGenerating}
-                    className={`${isMobile ? "w-full" : "flex-1"} py-3 rounded-xl bg-orange-500 text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-50`}
-                    title={t("page.downloadDesign")}
+                    onClick={handleOpenSaveDesign}
+                    disabled={saveDesignDone}
+                    className={`w-full ${isMobile ? "h-10 text-sm font-semibold rounded-2xl" : "py-3 rounded-xl font-bold"} bg-[var(--primary)] text-white flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-60`}
                   >
-                    <Download size={18} /> {t("page.downloadDesign")}
+                    {saveDesignDone ? <Check size={isMobile ? 16 : 18} /> : <Save size={isMobile ? 16 : 18} />}
+                    {saveDesignDone ? t("page.designSaved") : t("page.saveDesign")}
                   </button>
-                  <div className={`flex gap-3 ${isMobile ? "w-full" : ""}`}>
-                  <button
-                    onClick={handleRegenerate}
-                    disabled={isGenerating || (tokenBalance !== null && tokenBalance < TOKEN_COSTS.regenerate)}
-                    className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50`}
-                    title={t("tokens.regenerate")}
-                  >
-                    <RefreshCw size={18} /> {t("tokens.regenerate")}
-                  </button>
-                  <button
-                    onClick={() => setMarkerMode((on) => !on)}
-                    disabled={isGenerating}
-                    className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
-                      markerMode
-                        ? "bg-[var(--primary)] text-white"
-                        : "bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50"
-                    }`}
-                    title={t("components.drawOnImage")}
-                  >
-                    <PenTool size={18} />
-                    {!isMobile && t("common.mark")}
-                  </button>
-                  {currentProjectDbId && getAuthToken() && (
-                    <button
-                      type="button"
-                      onClick={() => setShareModalOpen(true)}
-                      disabled={isGenerating}
-                      className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50`}
-                      title={t("share.title")}
-                    >
-                      <Share2 size={18} />
-                      {!isMobile && t("share.title")}
-                    </button>
-                  )}
-                  </div>
-                </div>
+                )}
+
+                <ResultActionsMenu
+                  isGenerating={isGenerating}
+                  markerMode={markerMode}
+                  tokenBalance={tokenBalance}
+                  canShare={Boolean(currentProjectDbId && getAuthToken())}
+                  onDownload={handleDownloadGenerated}
+                  onRegenerate={handleRegenerate}
+                  onMark={() => setMarkerMode((on) => !on)}
+                  onShare={() => setShareModalOpen(true)}
+                />
 
                 {/* Chat-style edit input with image attachment */}
                 <div className="flex flex-col gap-2">
@@ -3397,7 +3664,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                   </div>
                 )}
 
-                {designMode === "custom" && (
+                {resolvedDesignMode === "custom" && (
                   <div className="w-full rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
                     <h3 className="text-sm font-bold mb-2 flex items-center gap-2">
                       <Sparkles size={16} className="text-[var(--primary)]" />
@@ -3417,8 +3684,12 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
     </div>
   ) : null;
 
+  const resultOverlayContent = showFinalResult ? quickRoomResultPanel : null;
+  const resultOverlayLoading = showResultOverlay && isGenerating;
+  const resultOverlayChildren = resultOverlayLoading ? null : resultOverlayContent;
+
   return (
-    <div className={`cd-page${uiTheme === "light" ? " cd-page--light" : ""}${keyboardOpen ? " cd-page--keyboard-open" : ""}`} suppressHydrationWarning>
+    <div className={`cd-page${uiTheme === "light" ? " cd-page--light" : ""}${keyboardOpen ? " cd-page--keyboard-open" : ""}${showResultOverlay ? " cd-page--result-overlay" : ""}`} suppressHydrationWarning>
       {/* ── Editorial header ── */}
       <header className="cd-editorial-header">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-shrink">
@@ -4027,6 +4298,33 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               </div>
             )}
 
+            {catalogAvailable && roomImageBase64 && vistaMode === "quick" && (
+              <div className="w-full flex flex-col gap-2">
+                <span className="cd-field-label">{t("project.designMode")}</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {(["made", "custom"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setDesignMode(mode)}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        resolvedDesignMode === mode
+                          ? "border-[var(--primary)] bg-[var(--primary)]/5"
+                          : "border-[var(--border)] hover:border-[var(--primary)]/50"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">
+                        {mode === "made" ? t("project.designModeMade") : t("project.designModeCustom")}
+                      </p>
+                      <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                        {mode === "made" ? t("project.designModeMadeHint") : t("project.designModeCustomHint")}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="w-full flex flex-col gap-2">
               <span className="cd-field-label">{t("page.placementModeLabel")}</span>
               <div className="cd-segment-toggle">
@@ -4052,7 +4350,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               </p>
             </div>
 
-            {placementMode === "redesign" && designMode === "custom" && (
+            {placementMode === "redesign" && (
               <div className="w-full flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-3">
                   <span className="cd-field-label">{t("page.shapeCreativityLabel")}</span>
@@ -4201,7 +4499,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
                     : "bg-[var(--muted)] text-[var(--muted-foreground)] cursor-not-allowed"
                 }`}
               >
-                {isGenerating && designMode === "custom" && quickRoomView === "result" ? (
+                {isGenerating && quickRoomView === "result" ? (
                   <>
                     <Sparkles size={20} />
                     {t("page.generateDesign")}
@@ -4235,260 +4533,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               <GenerationDebugPanel trace={generationDebug} />
             )}
 
-            {/* --- Phased Design UI --- */}
-            {phasedDesignActive && phasedCurrentPhase !== "idle" && phasedCurrentPhase !== "complete" && (
-              <div className="w-full flex flex-col gap-4 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-                <DesignPhaseStepper
-                  currentPhase={phasedCurrentPhase}
-                  status={phasedStatus}
-                  retryCount={phasedRetryCount}
-                  onSkipDecor={phase3Skippable ? handleSkipDecor : undefined}
-                  showSkipDecor={phase3Skippable && phasedCurrentPhase === "furniture" && phasedStatus === "done"}
-                />
-
-                {phasedSlotNotices.length > 0 && (
-                  <div
-                    className={`px-4 py-3 rounded-xl text-sm space-y-2 ${
-                      uiTheme === "light"
-                        ? "bg-amber-100 border border-amber-400/70 text-amber-950"
-                        : "bg-amber-500/20 border border-amber-500/45 text-amber-50"
-                    }`}
-                  >
-                    {phasedSlotNotices.map((notice) => (
-                      <p key={notice} className="flex items-start gap-2 leading-snug">
-                        <AlertCircle
-                          size={16}
-                          className={`shrink-0 mt-0.5 ${uiTheme === "light" ? "text-amber-700" : "text-amber-400"}`}
-                        />
-                        {notice}
-                      </p>
-                    ))}
-                  </div>
-                )}
-
-                {phasedError && (
-                  <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
-                    {phasedError}
-                    <button onClick={handleRedoPhase} className="ml-2 underline text-red-300 hover:text-red-200">
-                      Retry
-                    </button>
-                  </div>
-                )}
-
-                {currentPhaseImage && phasedStatus === "done" && (
-                  <>
-                    {phasedMarkerMode ? (
-                      <DrawingCanvas
-                        imageSrc={`data:${currentPhaseImage.mimeType};base64,${currentPhaseImage.base64}`}
-                        onAnnotatedImage={(base64, mime) => {
-                          setPhasedAnnotatedBase64(base64);
-                          setPhasedAnnotatedMimeType(mime);
-                        }}
-                        onFinish={() => {
-                          setPhasedMarkerMode(false);
-                          setPhaseEditOpen(true);
-                        }}
-                        className="cd-reveal"
-                      />
-                    ) : (
-                      <div
-                        className="relative w-full rounded-xl overflow-hidden border border-[var(--border)] cursor-pointer hover:shadow-lg transition-shadow"
-                        onClick={() => setLightboxSrc(`data:${currentPhaseImage.mimeType};base64,${currentPhaseImage.base64}`)}
-                      >
-                        <img
-                          src={`data:${currentPhaseImage.mimeType};base64,${currentPhaseImage.base64}`}
-                          alt={`Phase ${phasedCurrentPhase} result`}
-                          className="w-full h-auto"
-                        />
-                      </div>
-                    )}
-                    <PhaseVersionNav
-                      selectedIndex={currentPhaseSelectedIndex}
-                      totalVersions={currentPhaseVersions.length}
-                      onPrevious={handlePhaseVersionPrevious}
-                      onNext={handlePhaseVersionNext}
-                      disabled={isGenerating}
-                    />
-                    <PhaseApprovalBar
-                      currentPhase={phasedCurrentPhase as DesignPhase}
-                      onApprove={handleApprovePhase}
-                      onRedo={handleRedoPhase}
-                      onEditPrompt={() => setPhaseEditOpen((v) => !v)}
-                      onSkip={phase3Skippable && phasedCurrentPhase === "furniture" ? handleSkipDecor : undefined}
-                      isLoading={isGenerating}
-                    />
-                    <div className={`flex gap-3 ${isMobile ? "w-full" : ""}`}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPhasedMarkerMode((on) => {
-                            if (on && phasedAnnotatedBase64) setPhaseEditOpen(true);
-                            return !on;
-                          });
-                        }}
-                        disabled={isGenerating}
-                        className={`${isMobile ? "flex-1" : ""} px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
-                          phasedMarkerMode
-                            ? "bg-[var(--primary)] text-white"
-                            : "bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]/50"
-                        }`}
-                        title={t("components.drawOnImage")}
-                      >
-                        <PenTool size={18} />
-                        {!isMobile && t("common.mark")}
-                      </button>
-                    </div>
-                    {phaseEditOpen && (
-                      <div className="flex flex-col gap-2 mt-1">
-                        {phasedAnnotatedBase64 && (
-                          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--primary)]/10 border border-[var(--primary)]/30">
-                            <img
-                              src={`data:image/png;base64,${phasedAnnotatedBase64}`}
-                              alt={t("components.attachReference")}
-                              className="w-10 h-10 rounded object-cover border border-[var(--primary)]/40 shrink-0"
-                            />
-                            <p className="text-xs text-[var(--primary)] font-medium flex-1">{t("components.markedAreasSent")}</p>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPhasedAnnotatedBase64(null);
-                                setPhasedAnnotatedMimeType(null);
-                              }}
-                              className={`${isMobile ? "p-1.5" : "p-0.5"} rounded-full cd-media-icon-btn transition-colors cursor-pointer shrink-0`}
-                            >
-                              <X size={isMobile ? 14 : 12} />
-                            </button>
-                          </div>
-                        )}
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            value={phaseEditFeedback}
-                            onChange={(e) => setPhaseEditFeedback(e.target.value)}
-                            placeholder={t("page.describeChangesPlaceholder")}
-                            className="flex-1 px-4 py-3 rounded-xl bg-[var(--muted)] border border-[var(--border)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/50 focus:border-[var(--primary)] transition-all"
-                            onKeyDown={(e) => { if (e.key === "Enter" && phaseEditFeedback.trim()) handlePhaseEditSubmit(); }}
-                            disabled={isGenerating}
-                            autoFocus
-                          />
-                          <button
-                            onClick={handlePhaseEditSubmit}
-                            disabled={!phaseEditFeedback.trim() || isGenerating}
-                            className="px-5 py-3 rounded-xl bg-[var(--primary)] text-white font-semibold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-50"
-                          >
-                            <Send size={16} />
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {isGenerating && !currentPhaseImage && (
-                  <div className="w-full aspect-[16/10] cd-skeleton rounded-xl" />
-                )}
-              </div>
-            )}
-
-            {showFinalResultInline && quickRoomResultPanel}
-
-            {showFinalResultInline && designMode === "made" && (
-              <div className="w-full rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-                <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-                  <ShoppingBag size={16} className="text-[var(--primary)]" />
-                  {productLinks.length > 0 ? t("page.productsInRender") : t("page.yourSelectedProducts")}
-                </h3>
-                {productLinks.length === 0 ? (
-                  <p className="text-sm text-[var(--muted-foreground)]">{t("page.noProductsInRender")}</p>
-                ) : (
-                <div className="flex flex-col gap-3">
-                  {(() => {
-                    const list = productLinks;
-                    const showBands = list.length > 0;
-                    let lastBand: number | null = null;
-                    return list.map((link) => {
-                      const band = catalogCategorySortKey(link.category ?? "", link.name);
-                      const showHeader = showBands && band !== lastBand;
-                      lastBand = band;
-                      const bandKey = PRODUCT_BAND_I18N_KEYS[band] ?? PRODUCT_BAND_I18N_KEYS[PRODUCT_DISPLAY_BAND.other];
-                      return (
-                        <div key={link.id}>
-                          {showHeader && (
-                            <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)] mb-2 mt-1 first:mt-0">
-                              {t(bandKey)}
-                            </p>
-                          )}
-                          <div className={`${isMobile ? "flex flex-col gap-2" : "flex items-center gap-3"} p-3 rounded-xl bg-[var(--muted)] border border-[var(--border)]`}>
-                            <div className="flex items-center gap-3 w-full">
-                        {link.imageUrl && (
-                          <div className="w-14 h-14 rounded-lg overflow-hidden bg-[var(--border)] flex-shrink-0">
-                            <img src={link.imageUrl} alt="" className="w-full h-full object-cover" loading="lazy" />
-                          </div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{link.name}</p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-sm font-bold text-[var(--primary)]">{formatAMD(link.price)}</span>
-                            {link.dimensions && (
-                              <span className="text-xs text-[var(--muted-foreground)] flex items-center gap-1">
-                                <Ruler size={10} />
-                                {link.dimensions}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {!isMobile && (
-                          <a
-                            href={link.sourceUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--primary)] text-white text-xs font-semibold hover:brightness-110 transition-all flex-shrink-0"
-                          >
-                            <ExternalLink size={12} />
-                            {t("components.viewOnMarketplace", { marketplace: link.sourceMarketplace })}
-                          </a>
-                        )}
-                      </div>
-                      {isMobile && (
-                        <a
-                          href={link.sourceUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-[var(--primary)] text-white text-xs font-semibold hover:brightness-110 transition-all w-full"
-                        >
-                          <ExternalLink size={12} />
-                          {t("components.viewOnMarketplace", { marketplace: link.sourceMarketplace })}
-                        </a>
-                      )}
-                    </div>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-                )}
-                {productLinks.length > 0 && (
-                  <p className="text-[11px] text-[var(--muted-foreground)] mt-3">
-                    {t("page.productsSourcedFrom")}
-                  </p>
-                )}
-
-                {/* Save Design button */}
-                <button
-                  type="button"
-                  onClick={handleOpenSaveDesign}
-                  disabled={saveDesignDone}
-                  className="mt-4 w-full py-3 rounded-xl bg-[var(--primary)] text-white font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all cursor-pointer disabled:opacity-60"
-                >
-                  {saveDesignDone ? <Check size={18} /> : <Save size={18} />}
-                  {saveDesignDone ? t("page.designSaved") : t("page.saveDesign")}
-                </button>
-              </div>
-            )}
-
-            {isGenerating && !showFinalResultInline && !phasedDesignActive && designMode !== "custom" && (
-              <div className="w-full aspect-[16/10] cd-skeleton rounded-2xl" />
-            )}
+            {!showResultOverlay && showFinalResultInline && quickRoomResultPanel}
           </div>
         </main>
 
@@ -4514,6 +4559,12 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
             ref={selectedProductsListRef}
             className="cd-selected-products-list custom-scrollbar p-3"
           >
+            {resolvedDesignMode === "made"
+              && selectedProducts.length > QUICK_ROOM_MADE_PRODUCTS_PER_STEP && (
+              <p className="text-xs text-[var(--muted-foreground)] px-1 pb-1 leading-snug">
+                {t("page.madeProductsStepByStepHint")}
+              </p>
+            )}
             {selectedProducts.length > 0 ? (
               <div className="flex flex-col gap-2 pb-1">
                 {selectedProducts.map((p) => (
@@ -4729,16 +4780,16 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
 
 
       <QuickRoomResultOverlay
-        open={showCustomResultOverlay}
-        onBack={() => setQuickRoomView("compose")}
-        backDisabled={customResultLoading}
-        isLoading={customResultLoading}
+        open={showResultOverlay}
+        onBack={handleResultOverlayBack}
+        backDisabled={false}
+        isLoading={resultOverlayLoading}
         loaderPhase={quickRoomLoaderPhase}
         error={error}
         onRetry={() => void handleGenerateClick()}
-        footer={isMobile && designMode === "custom" && showFinalResult ? customResultActions : undefined}
+        footer={isMobile && resolvedDesignMode === "custom" && showFinalResult ? customResultActions : undefined}
       >
-        {quickRoomResultPanel}
+        {resultOverlayChildren}
       </QuickRoomResultOverlay>
 
       {/* Lightbox modal */}

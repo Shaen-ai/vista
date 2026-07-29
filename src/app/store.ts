@@ -4,7 +4,7 @@ import {
   type SupportedCountry,
   SUPPORTED_COUNTRIES_FALLBACK,
 } from "@/lib/supportedCountriesFallback";
-import { resolveDesignMode } from "@/lib/designModeConfig";
+import { resolveDesignMode, isMadeDesignModeAvailable } from "@/lib/designModeConfig";
 import type { QuickRoomPlacementMode } from "@/lib/quickRoom/placementMode";
 import type {
   FloorPlanAnalysis,
@@ -659,8 +659,28 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
   setSearchQuery: (q) => set({ searchQuery: q }),
   setSearchResults: (results) => set({ searchResults: results }),
   setSearchLoading: (loading) => set({ searchLoading: loading }),
-  setSelectedCountry: (country) => set({ selectedCountry: country }),
-  setSearchMode: (mode) => set({ searchMode: mode }),
+  setSelectedCountry: (country) =>
+    set((s) => {
+      if (isMadeDesignModeAvailable(country, s.searchMode) || s.designMode !== "made") {
+        return { selectedCountry: country };
+      }
+      return {
+        selectedCountry: country,
+        designMode: "custom" as const,
+        projectPreferences: { ...s.projectPreferences, designMode: "custom" },
+      };
+    }),
+  setSearchMode: (mode) =>
+    set((s) => {
+      if (isMadeDesignModeAvailable(s.selectedCountry, mode) || s.designMode !== "made") {
+        return { searchMode: mode };
+      }
+      return {
+        searchMode: mode,
+        designMode: "custom" as const,
+        projectPreferences: { ...s.projectPreferences, designMode: "custom" },
+      };
+    }),
   setLiveSearchResults: (results) => set({ liveSearchResults: results }),
   setLiveSearchSources: (sources) => set({ liveSearchSources: sources }),
   setLiveSearchLoading: (loading) => set({ liveSearchLoading: loading }),
@@ -731,7 +751,13 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
 
   setTextPrompt: (prompt) => set({ textPrompt: prompt }),
   setSelectedStyle: (style) => set({ selectedStyle: style }),
-  setDesignMode: (mode) => set({ designMode: resolveDesignMode(mode) }),
+  setDesignMode: (mode) =>
+    set((s) => ({
+      designMode: resolveDesignMode(mode, {
+        countryCode: s.selectedCountry,
+        searchMode: s.searchMode,
+      }),
+    })),
   setPlacementMode: (mode) => set({ placementMode: mode }),
   setShapeCreativity: (level) =>
     set({ shapeCreativity: Math.max(0, Math.min(10, Math.round(level))) }),
@@ -886,7 +912,6 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
       generatedImageMimeType: null,
       designBrief: null,
       productLinks: [],
-      quickRoomView: "compose",
     }),
   setPhasedPhase: (phase) => set({ phasedCurrentPhase: phase, phasedStatus: "selecting", phasedRetryCount: 0, phasedError: null }),
   setPhasedStatus: (status) => set({ phasedStatus: status }),
@@ -1059,15 +1084,21 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
     })),
 
   setProjectPreferences: (prefs) =>
-    set((s) => ({
-      projectPreferences: {
-        ...s.projectPreferences,
-        ...prefs,
-        ...(prefs.designMode !== undefined
-          ? { designMode: resolveDesignMode(prefs.designMode) }
-          : {}),
-      },
-    })),
+    set((s) => {
+      const catalog = {
+        countryCode: prefs.countryCode ?? s.projectPreferences.countryCode ?? s.selectedCountry,
+        searchMode: prefs.searchMode ?? s.projectPreferences.searchMode ?? s.searchMode,
+      };
+      return {
+        projectPreferences: {
+          ...s.projectPreferences,
+          ...prefs,
+          ...(prefs.designMode !== undefined
+            ? { designMode: resolveDesignMode(prefs.designMode, catalog) }
+            : {}),
+        },
+      };
+    }),
 
   setProjectData: (data) =>
     // Merge: only overwrite fields the caller actually provided, so a partial

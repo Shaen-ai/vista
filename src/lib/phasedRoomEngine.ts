@@ -26,7 +26,8 @@ import {
 } from "@/lib/consumerCatalog";
 import { fetchProductPurchaseLinks, type ProductPurchaseLink } from "@/lib/productPurchaseLinks";
 import { sortProductsForDisplay } from "@/lib/productDisplayOrder";
-import { getRoomSlotTemplate, mergeRoomSlots } from "@/lib/roomSlotTemplates";
+import { getMadeModeRoomSlots, getRoomSlotTemplate, mergeRoomSlots } from "@/lib/roomSlotTemplates";
+import { isOrientationFlip, nearestEditAspectRatio } from "@/lib/editAspectRatio";
 import {
   constraintsFromRoomAndStyle,
   filterSlotsForRoomType,
@@ -40,10 +41,15 @@ import { buildGeminiProductVisualParts } from "@/lib/buildGeminiProductVisualPar
 import {
   type DesignPhase,
   classifyProductPhase,
-  filterSlotsForPhase,
+  effectiveMadePhaseProductLimit,
+  filterSlotsForMadePhase,
   partitionByPhase,
   PHASE_PRODUCT_LIMITS,
+  productMatchesMadePhase,
+  QUICK_ROOM_MADE_PRODUCTS_PER_STEP,
 } from "@/lib/phaseRouter";
+import { buildPreserveBlock } from "@/lib/quickRoom/quickEditPrompt";
+import type { PreserveMode } from "@/lib/quickRoom/shapeCreativity";
 import {
   buildImaginedSlotEntries,
   buildSlotNotices,
@@ -274,6 +280,15 @@ export interface PhasedRoomInput {
   objectRemovalMask?: { base64: string; mimeType: string } | null;
   /** When transferring hero design onto a secondary camera — mirror rules for ~180° views. */
   viewpointTransferDirective?: string;
+  /** Quick Room made: ≤4 selected products — merge furniture + decor in one furniture call. */
+  compactProductFlow?: boolean;
+  /** Ready-made ("made") design type — use the reduced flooring+furniture slot kit (<=4 products). */
+  madeMode?: boolean;
+  /** Max product reference images per Gemini request (Quick Room made default 4). */
+  productsPerStep?: number;
+  /** Quick Room made: prepend PRESERVE block + opening freeze masks from preserve mode. */
+  veryStrongShapeLock?: boolean;
+  shapePreserveMode?: PreserveMode;
 }
 
 export interface PhasedRoomResult {
@@ -288,6 +303,15 @@ export interface PhasedRoomResult {
   productLinks: ProductPurchaseLink[];
   imaginedSlots: ImaginedSlotEntry[];
   slotNotices: string[];
+}
+
+function resolvePhasedShapePreserveMode(opts: {
+  shapePreserveMode?: PreserveMode;
+  veryStrongShapeLock?: boolean;
+}): PreserveMode | null {
+  if (opts.shapePreserveMode) return opts.shapePreserveMode;
+  if (opts.veryStrongShapeLock) return "veryStrong";
+  return null;
 }
 
 async function generatePhasedGeminiImage(opts: {
@@ -306,6 +330,8 @@ async function generatePhasedGeminiImage(opts: {
   merchantAppendix?: string;
   extraPromptBlock?: string;
   hasCatalogProducts?: boolean;
+  /** Ready-made ("made") design type — drives the rich-styling directive. */
+  madeMode?: boolean;
   /** Floor-plan reference images — spatial reference only, never rendered. */
   floorPlanParts?: Array<{ base64: string; mimeType: string; label: string }>;
   /** Other photos of the same room — equal references to the same physical space. */
@@ -340,6 +366,8 @@ async function generatePhasedGeminiImage(opts: {
   editAnnotationImage?: { base64: string; mimeType: string } | null;
   objectRemovalMask?: { base64: string; mimeType: string } | null;
   viewpointTransferDirective?: string;
+  veryStrongShapeLock?: boolean;
+  shapePreserveMode?: PreserveMode;
 }): Promise<Array<{ base64: string; mimeType: string }>> {
   const simpleDirect = opts.simpleDirectRender && !!opts.preferencesPrompt;
   const photoGrounded = !!(
@@ -384,6 +412,14 @@ async function generatePhasedGeminiImage(opts: {
         })
       : GEMINI_FALLBACK_RENDER_PROMPT;
 
+  const shapePreserveMode = resolvePhasedShapePreserveMode(opts);
+  if (shapePreserveMode && !opts.geminiRenderPrompt?.trim()) {
+    const preserve = buildPreserveBlock(shapePreserveMode);
+    if (!renderPrompt.includes(preserve.slice(0, 40))) {
+      renderPrompt = `${preserve}\n\n${renderPrompt}`;
+    }
+  }
+
   // Design concept path skips buildStructuralGuardrailPrompt — always append the
   // per-viewpoint opening lock so door/window counts and solid-wall rules reach Gemini.
   const openingLock = buildOpeningStructuralLock(opts.roomAnalysis, opts.roomGeometry);
@@ -410,6 +446,19 @@ async function generatePhasedGeminiImage(opts: {
     if (noColumn && !renderPrompt.includes("STRUCTURAL COLUMNS") && !renderPrompt.includes("PRESERVE COLUMNS")) {
       renderPrompt += `\n\n${noColumn}`;
     }
+    // Reinforce the pixel-level aspect lock: keep the exact camera framing so the
+    // model can't crop/zoom/reframe its way into re-inventing the room geometry.
+    if (!renderPrompt.includes("FRAME LOCK")) {
+      renderPrompt += `\n\nFRAME LOCK (non-negotiable): Reproduce the EXACT camera framing, zoom level, and room proportions of the EDIT TARGET photo. Do NOT crop, zoom, pan, tilt, re-frame, or change the canvas orientation. The output must line up wall-for-wall and corner-for-corner with the input photo — same vanishing point, same wall angles, same floor/ceiling lines.`;
+    }
+  }
+
+  // RICH STYLING — Ready-made places only a few shoppable catalog products, which
+  // can leave the room looking bare. Instruct a fully-styled, magazine-quality
+  // interior WITHOUT adding any competing large furniture and WITHOUT altering the
+  // provided catalog products or the room's architecture.
+  if (opts.madeMode && opts.phase !== "base" && !renderPrompt.includes("RICH STYLING")) {
+    renderPrompt += `\n\nRICH STYLING (make it look designed, not empty): Style the room to a polished, magazine-quality interior. Layer in cohesive, non-structural decor that fills the space with warmth and depth — an area rug that anchors the seating, greenery/potted plants, framed wall art, cushions and a throw, books and small objects on surfaces, and warm layered lighting (ambient + accent). Add subtle material and texture variety and natural depth of field. This styling is decorative dressing only: keep every provided catalog product exactly as shown (same model, color, finish, position), do NOT add or substitute large hero furniture beyond the catalog pieces, and keep all walls, windows, doors, and camera framing unchanged.`;
   }
 
   if (opts.designReferenceImage?.base64 && opts.viewpointTransferDirective?.trim()) {
@@ -604,6 +653,22 @@ async function generatePhasedGeminiImage(opts: {
       for (const p of opts.styleInspirationParts) parts.push(p);
     }
 
+    const maskPreserveMode = resolvePhasedShapePreserveMode(opts);
+    if (
+      maskPreserveMode
+      && maskPreserveMode !== "soft"
+      && opts.roomImage
+      && !isHallwayPhotoEdit
+      && (opts.photoWindowBoxes?.length || opts.photoDoorBoxes?.length)
+    ) {
+      const maskParts = await buildOpeningMaskParts(
+        opts.roomImage.base64,
+        opts.photoWindowBoxes ?? [],
+        opts.photoDoorBoxes ?? [],
+      );
+      if (maskParts) parts.push(...maskParts);
+    }
+
     for (const p of opts.productParts) parts.push(p);
 
     if (opts.viewpointParts?.length && opts.roomType !== "hallway") {
@@ -775,19 +840,72 @@ async function generatePhasedGeminiImage(opts: {
       floorPlanImagesSent: opts.floorPlanParts?.length ?? 0,
       promptSource: opts.geminiRenderPrompt ? "claude-designConcept" : simpleDirect ? "deterministic" : "fallback",
     });
-    const result = await model.generateContent(parts as Part[]);
     type GenPart = { inlineData?: { data?: unknown; mimeType?: unknown }; text?: string };
-    images = [];
-    for (const candidate of result.response?.candidates ?? []) {
-      for (const part of candidate.content?.parts ?? []) {
-        const pdata = part as GenPart;
-        const raw = pdata.inlineData?.data;
-        if (typeof raw === "string" && raw) {
-          const mt = pdata.inlineData?.mimeType;
-          images.push({ base64: raw, mimeType: typeof mt === "string" && mt ? mt : "image/png" });
+    // Pin the output canvas to the input photo's aspect ratio. Without this, Gemini
+    // ("auto" framing) reframes landscape rooms into portrait and re-invents the
+    // geometry (widened walls, moved/added openings) — the exact drift the FAL edit
+    // pipeline avoids for Custom mode via nano-banana's aspect_ratio param.
+    const lockedAspectRatio =
+      inputPhotoWidth > 0 && inputPhotoHeight > 0
+        ? nearestEditAspectRatio(inputPhotoWidth, inputPhotoHeight)
+        : undefined;
+    const perRequestGenerationConfig = {
+      ...(isHallwayPhotoEdit
+        ? { ...RENDER_GENERATION_CONFIG, temperature: 0.05 }
+        : RENDER_GENERATION_CONFIG),
+      ...(lockedAspectRatio ? { imageConfig: { aspectRatio: lockedAspectRatio } } : {}),
+    };
+    const runGeminiImageRequest = async () => {
+      const res = await model.generateContent({
+        contents: [{ role: "user", parts: parts as Part[] }],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        generationConfig: perRequestGenerationConfig as any,
+      });
+      const imgs: Array<{ base64: string; mimeType: string }> = [];
+      for (const candidate of res.response?.candidates ?? []) {
+        for (const part of candidate.content?.parts ?? []) {
+          const pdata = part as GenPart;
+          const raw = pdata.inlineData?.data;
+          if (typeof raw === "string" && raw) {
+            const mt = pdata.inlineData?.mimeType;
+            imgs.push({ base64: raw, mimeType: typeof mt === "string" && mt ? mt : "image/png" });
+          }
         }
       }
+      return { res, imgs };
+    };
+
+    let genRun = await runGeminiImageRequest();
+
+    // Belt-and-suspenders: if the model still flipped orientation despite the
+    // explicit aspect lock, retry once before accepting a reframed render.
+    if (lockedAspectRatio && genRun.imgs[0]?.base64 && inputPhotoWidth > 0 && inputPhotoHeight > 0) {
+      try {
+        const outMeta = await sharp(Buffer.from(genRun.imgs[0].base64, "base64")).metadata();
+        if (isOrientationFlip(inputPhotoWidth, inputPhotoHeight, outMeta.width ?? 0, outMeta.height ?? 0)) {
+          pipelineLog(
+            "GEMINI_GENERATE",
+            "orientation flip despite aspect lock — retrying once",
+            {
+              phase: opts.phase,
+              inputPhotoWidth,
+              inputPhotoHeight,
+              outputWidth: outMeta.width ?? 0,
+              outputHeight: outMeta.height ?? 0,
+              aspectRatio: lockedAspectRatio,
+            },
+            "error",
+          );
+          const retry = await runGeminiImageRequest();
+          if (retry.imgs.length > 0) genRun = retry;
+        }
+      } catch {
+        /* metadata optional */
+      }
     }
+
+    const result = genRun.res;
+    images = genRun.imgs;
     blockReason = result.response?.promptFeedback?.blockReason;
     finishReason = result.response?.candidates?.[0]?.finishReason;
     await recordGeminiGenerationSpend(GEMINI_IMAGE_MODEL_LABEL, `phased-${opts.phase}`, result, images.length);
@@ -896,6 +1014,11 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
     objectRemovalMask = null,
     viewpointTransferDirective,
     doorDesign = null,
+    compactProductFlow = false,
+    madeMode = false,
+    productsPerStep,
+    veryStrongShapeLock = false,
+    shapePreserveMode,
   } = input;
 
   const empty: Omit<PhasedRoomResult, "ok" | "status" | "error"> = {
@@ -1030,12 +1153,18 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
     for (const row of pinRows) catalogCtx.summaryById.set(row.id, row);
   }
 
-  // Resolve catalog slots filtered to this phase.
+  // Resolve catalog slots filtered to this phase. Ready-made ("made") uses the
+  // reduced flooring+furniture kit (<=4 shoppable products, no lighting/accessory
+  // slots) so lampshades/picture frames can't displace the hero furniture.
+  const madeOrCompact = madeMode || compactProductFlow;
+  const slotTemplate = madeOrCompact
+    ? getMadeModeRoomSlots(roomType, roomAnalysis?.window_count)
+    : getRoomSlotTemplate(roomType, roomAnalysis?.window_count);
   const allSlots = filterSlotsForRoomType(
-    mergeRoomSlots({ template: getRoomSlotTemplate(roomType, roomAnalysis?.window_count) }),
+    mergeRoomSlots({ template: slotTemplate }),
     roomType,
   );
-  const phaseSlots = filterSlotsForPhase(allSlots, phase);
+  const phaseSlots = filterSlotsForMadePhase(allSlots, phase, compactProductFlow);
 
   if (phaseSlots.length === 0 && pinnedProductIds.length === 0) {
     return {
@@ -1109,10 +1238,21 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
   selectedForGemini = selectedForGemini.filter((id) => {
     const item = catalogCtx.summaryById.get(id);
     if (!item) return false;
-    return classifyProductPhase(item) === phase;
+    return productMatchesMadePhase(item, phase, compactProductFlow);
   });
 
-  const limit = PHASE_PRODUCT_LIMITS[phase];
+  const perStep = productsPerStep ?? QUICK_ROOM_MADE_PRODUCTS_PER_STEP;
+  let limit = productsPerStep != null
+    ? Math.min(PHASE_PRODUCT_LIMITS[phase], perStep)
+    : PHASE_PRODUCT_LIMITS[phase];
+  if (productsPerStep != null && compactProductFlow && phase === "furniture") {
+    limit = effectiveMadePhaseProductLimit(
+      phase,
+      perStep,
+      previousPhaseProducts,
+      catalogCtx.summaryById,
+    );
+  }
   selectedForGemini = selectedForGemini.slice(0, limit);
 
   if (selectedForGemini.length === 0 && inspirationItems.length === 0 && phase !== "base") {
@@ -1197,6 +1337,7 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
       designReferenceImage,
       additionalDesignReferences,
       hasCatalogProducts: selectedForGemini.length > 0 || inspirationItems.length > 0,
+      madeMode: madeOrCompact,
       projectId,
       roomId,
       roomName,
@@ -1218,6 +1359,8 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
       objectRemovalMask,
       viewpointTransferDirective,
       doorDesign: doorDesign ?? brief?.doorDesign,
+      veryStrongShapeLock,
+      shapePreserveMode,
     });
 
     if (images.length === 0) {

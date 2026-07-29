@@ -8,7 +8,7 @@
 
 import type { ProductPurchaseLink } from "@/lib/productPurchaseLinks";
 import type { OpeningBox } from "@/lib/interiorDesignPrompts";
-import { resolveDesignMode } from "@/lib/designModeConfig";
+import { resolveDesignMode, designModeCatalogFromPreferences } from "@/lib/designModeConfig";
 
 // ---------------------------------------------------------------------------
 // Enums & literals
@@ -674,9 +674,12 @@ function parseRoomWishes(raw: unknown): Record<string, string> | undefined {
 /** Parse client preferences JSON for project create / concept routes. */
 export function parseUserPreferences(raw: unknown): UserPreferences {
   const parsed = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const countryCode = typeof parsed.countryCode === "string" ? parsed.countryCode : undefined;
+  const searchMode = typeof parsed.searchMode === "string" ? parsed.searchMode : undefined;
   const designModeRaw = parsed.designMode;
   const designMode = resolveDesignMode(
     designModeRaw === "custom" || designModeRaw === "made" ? designModeRaw : undefined,
+    designModeCatalogFromPreferences({ countryCode, searchMode }),
   );
 
   return {
@@ -689,8 +692,8 @@ export function parseUserPreferences(raw: unknown): UserPreferences {
     roomWishes: parseRoomWishes(parsed.roomWishes),
     totalArea: typeof parsed.totalArea === "number" ? parsed.totalArea : undefined,
     address: typeof parsed.address === "string" ? parsed.address : undefined,
-    countryCode: typeof parsed.countryCode === "string" ? parsed.countryCode : undefined,
-    searchMode: typeof parsed.searchMode === "string" ? parsed.searchMode : undefined,
+    countryCode,
+    searchMode,
     designMode,
   };
 }

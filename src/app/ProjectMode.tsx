@@ -239,8 +239,8 @@ import { compressImageFile } from "@/lib/compressImageClient";
 import { pipelineLog, summarizeRoomParams, userFlowLog } from "@/lib/pipelineLog";
 import {
   isCustomDesignMode,
+  isFreeRenderMode,
   resolveDesignMode,
-  SHOW_MADE_DESIGN_MODE,
 } from "@/lib/designModeConfig";
 import { CameraCapture } from "@/components/CameraCapture";
 import DrawingCanvas from "@/components/DrawingCanvas";
@@ -1290,6 +1290,12 @@ function ProjectDesignBriefStep({
 }) {
   const { t } = useTranslation();
   const { stylePresetLabel, stylePresetDescription } = useCatalogLabels();
+  const catalogAvailable = hasLocalProductCatalog(catalogCountryCode, catalogSearchMode);
+  const designModeCatalog = { countryCode: catalogCountryCode, searchMode: catalogSearchMode };
+  const resolvedPreferencesDesignMode = resolveDesignMode(
+    preferences.designMode,
+    designModeCatalog,
+  );
   const {
     createProject: createProjectDb,
     loadProjects,
@@ -1309,7 +1315,7 @@ function ProjectDesignBriefStep({
       style: preferences.style,
       familyMembers: preferences.familyMembers,
       budgetTier: preferences.budgetTier,
-      designMode: resolveDesignMode(preferences.designMode),
+      designMode: resolveDesignMode(preferences.designMode, designModeCatalog),
       inspirationProducts: inspirationProducts.length,
     });
     setProjectLoading(true);
@@ -1506,7 +1512,7 @@ function ProjectDesignBriefStep({
         </div>
       </div>
 
-      {SHOW_MADE_DESIGN_MODE && (
+      {catalogAvailable && (
         <div>
           <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-2 block">
             {t("project.designMode")}
@@ -1518,7 +1524,7 @@ function ProjectDesignBriefStep({
                 type="button"
                 onClick={() => setPreferences({ designMode: mode })}
                 className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                  resolveDesignMode(preferences.designMode) === mode
+                  resolvedPreferencesDesignMode === mode
                     ? "border-[var(--primary)] bg-[var(--primary)]/5"
                     : "border-[var(--border)] hover:border-[var(--primary)]/50"
                 }`}
@@ -4225,16 +4231,19 @@ function ProjectRoomReviewStep({
   const tokenBalance = useConsumerDesignStore((s) => s.tokenBalance);
   const setTokenBalance = useConsumerDesignStore((s) => s.setTokenBalance);
   const currentRoom = rooms[currentRoomIndex];
-  const designMode = useConsumerDesignStore((s) =>
-    resolveDesignMode(s.projectPreferences.designMode),
-  );
-  const isCustom = isCustomDesignMode(designMode);
+  const projectPreferences = useConsumerDesignStore((s) => s.projectPreferences);
   const catalogCountryCode = useConsumerDesignStore(
     (s) => s.projectPreferences.countryCode ?? s.selectedCountry,
   );
   const catalogSearchMode = useConsumerDesignStore(
     (s) => s.projectPreferences.searchMode ?? s.searchMode,
   );
+  const designModeCatalog = {
+    countryCode: catalogCountryCode,
+    searchMode: catalogSearchMode,
+  };
+  const designMode = resolveDesignMode(projectPreferences.designMode, designModeCatalog);
+  const isCustom = isCustomDesignMode(designMode, designModeCatalog);
   const catalogAvailable = hasLocalProductCatalog(catalogCountryCode, catalogSearchMode);
   const suggestedOrder = useConsumerDesignStore((s) => s.projectSuggestedRoomOrder);
   const hasPdf = useConsumerDesignStore((s) => s.hasPdf);
@@ -4294,6 +4303,7 @@ function ProjectRoomReviewStep({
       if (!projectId || !currentRoom) return;
       const mode = resolveDesignMode(
         useConsumerDesignStore.getState().projectPreferences.designMode,
+        designModeCatalog,
       );
       return streamGenerateRoom(
         projectId,
@@ -4307,7 +4317,7 @@ function ProjectRoomReviewStep({
         { ...opts, designMode: mode },
       );
     },
-    [projectId, currentRoom, streamGenerateRoom, onTrackGenerationProgress],
+    [projectId, currentRoom, streamGenerateRoom, onTrackGenerationProgress, designModeCatalog],
   );
 
   const resetEditUi = useCallback(() => {
@@ -4813,7 +4823,7 @@ function ProjectRoomReviewStep({
         </div>
       )}
 
-      {!roomDone && !isCustom && SHOW_MADE_DESIGN_MODE && (
+      {!roomDone && !isCustom && catalogAvailable && (
         <DesignPhaseStepper currentPhase={stepperCurrent} status={stepperStatus} retryCount={0} />
       )}
 

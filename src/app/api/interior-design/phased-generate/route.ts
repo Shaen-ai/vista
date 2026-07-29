@@ -21,6 +21,7 @@ import {
   type RoomAnalysis,
 } from "@/lib/interiorDesignPrompts";
 import type { RoomGeometry } from "@/lib/roomGeometryTypes";
+import { parseShapeCreativityParam, resolveShapeCreativity } from "@/lib/quickRoom/shapeCreativity";
 import { StepTimer } from "@/lib/generationDebug";
 import { resolveRenderProvider } from "@/lib/roomImageRenderer";
 import {
@@ -297,6 +298,19 @@ async function handlePhasedPost(request: NextRequest) {
     const clientCatalogAllowlistIds = parseNumericIdListFromForm(formData, "catalogAllowlistIds");
     const inspirationItems = await parseInspirationProducts(formData);
     const styleInspirationParts = await parseStyleInspirationParts(formData);
+    const compactProductFlow = String(formData.get("compactProductFlow") ?? "").trim() === "true";
+    // Ready-made ("made") design type — use the reduced flooring+furniture slot kit.
+    // compactProductFlow implies made, but made can also run non-compact (>4 pinned products).
+    const madeMode = compactProductFlow || String(formData.get("madeMode") ?? "").trim() === "true";
+    const productsPerStepRaw = Number(formData.get("productsPerStep"));
+    const productsPerStep = Number.isFinite(productsPerStepRaw) && productsPerStepRaw > 0
+      ? Math.min(4, Math.round(productsPerStepRaw))
+      : 4;
+    const shapeCreativityRaw = formData.get("shapeCreativity");
+    const hasShapeCreativity = shapeCreativityRaw != null && String(shapeCreativityRaw).trim() !== "";
+    const shapePreserveMode = hasShapeCreativity
+      ? resolveShapeCreativity(parseShapeCreativityParam(shapeCreativityRaw)).preserveMode
+      : undefined;
 
     const adminSlug =
       ((formData.get("adminSlug") as string) || "").trim() ||
@@ -410,6 +424,12 @@ async function handlePhasedPost(request: NextRequest) {
       googleKey,
       anthropicKey: anthropicKey || undefined,
       doorDesign,
+      compactProductFlow,
+      madeMode,
+      productsPerStep,
+      ...(shapePreserveMode ? { shapePreserveMode } : { veryStrongShapeLock: true }),
+      photoWindowBoxes: roomAnalysis?.window_boxes ?? [],
+      photoDoorBoxes: roomAnalysis?.door_boxes ?? [],
     });
 
     timer.mark("engine_done", {
