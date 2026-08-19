@@ -3,10 +3,13 @@ import { describe, it } from "node:test";
 import {
   classifyProductPhase,
   classifyPinnedProductPhase,
+  filterSlotsForMadePhase,
   isDecorPhaseSkippableForStyle,
   slotDisplayLabel,
 } from "./phaseRouter";
 import type { CatalogItemSummary } from "./consumerCatalog";
+import { getMadeModeRoomSlots, mergeRoomSlots } from "./roomSlotTemplates";
+import { filterSlotsForRoomType } from "./resolveCatalogSlots";
 
 function summary(partial: Partial<CatalogItemSummary> & Pick<CatalogItemSummary, "name">): CatalogItemSummary {
   return {
@@ -78,5 +81,15 @@ describe("phaseRouter", () => {
   it("formats slot labels for user notices", () => {
     assert.equal(slotDisplayLabel({ family: "flooring", quantity: 1 }), "flooring");
     assert.equal(slotDisplayLabel({ family: "window_treatments", subtype: "curtain", quantity: 1 }), "curtains");
+  });
+
+  it("hallway made mode has no furniture or decor phase slots (triggers catalog-free fallback)", () => {
+    const allSlots = filterSlotsForRoomType(
+      mergeRoomSlots({ template: getMadeModeRoomSlots("hallway", 2) }),
+      "hallway",
+    );
+    assert.equal(filterSlotsForMadePhase(allSlots, "base", true).length, 1);
+    assert.equal(filterSlotsForMadePhase(allSlots, "furniture", true).length, 0);
+    assert.equal(filterSlotsForMadePhase(allSlots, "decor", true).length, 0);
   });
 });

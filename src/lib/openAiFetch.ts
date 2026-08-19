@@ -38,16 +38,20 @@ async function recordUsageFromResponse(res: Response, requestBody?: string): Pro
   }
 }
 
+// Timeouts are deliberately short: a hung request that sits at the transport layer
+// for 15 min combined with withRetry's up-to-3 retries could block a single logical
+// call for close to an hour. Real gpt-5.5 vision/reasoning responses land well within
+// these windows; a request that doesn't is far more likely stuck than "almost done".
 const visionAgent = new Agent({
-  connectTimeout: 60_000,
-  headersTimeout: 900_000, // 15 min
-  bodyTimeout: 900_000,
+  connectTimeout: 30_000,
+  headersTimeout: 180_000, // 3 min
+  bodyTimeout: 180_000,
 });
 
 const defaultAgent = new Agent({
-  connectTimeout: 30_000,
-  headersTimeout: 600_000, // 10 min
-  bodyTimeout: 600_000,
+  connectTimeout: 15_000,
+  headersTimeout: 120_000, // 2 min
+  bodyTimeout: 120_000,
 });
 
 export type OpenAiFetchOptions = {

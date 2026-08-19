@@ -18,7 +18,11 @@ import type {
 } from "@/lib/project/types";
 import { quickRoomNeedsMandatorySpatialClarification, type RoomAnalysis, type RoomType } from "@/lib/interiorDesignPrompts";
 import type { RoomGeometry } from "@/lib/roomGeometryTypes";
+import type { FloorPlanGraph } from "@/lib/project/floorPlanGraph";
+import type { NormalizedFloorPlanDetection } from "@/lib/project/floorPlanDetections";
+import type { StoredPlanPanelInset } from "@/lib/project/floorPlanPanelCropClient";
 import type { DesignPhase } from "@/lib/phaseRouter";
+import { DEFAULT_SHAPE_CREATIVITY } from "@/lib/quickRoom/shapeCreativity";
 
 export interface MarketplaceProduct {
   id: number;
@@ -379,6 +383,10 @@ interface ConsumerDesignState {
   projectPreferences: UserPreferences;
   projectId: string | null;
   projectAnalysis: FloorPlanAnalysis | null;
+  /** Normalized editing graph (in-memory working copy; re-derivable from analysis). */
+  projectGraph: FloorPlanGraph | null;
+  /** DEV-only: when true, the floor-plan review step auto-enters the 2D editor (fixture flow). */
+  devAutoEditPlan: boolean;
   projectConcept: ProjectConceptSummary | null;
   projectRooms: RoomResult[];
   currentProjectRoomIndex: number;
@@ -394,6 +402,15 @@ interface ConsumerDesignState {
   projectUtilityEntryPoints: UtilityEntryPoint[];
   /** Rooms the user traced in the upload-step "Draw plan" editor (seed for analysis). */
   projectDraftRooms: DetectedRoom[];
+  /** When true, Project upload opens the draw-plan panel on mount (after align warning). */
+  projectExpandDrawOnUpload: boolean;
+  /** Roboflow CubiCasa overlay on uploaded floor plan (normalized 0–1 boxes). */
+  projectFloorPlanDetections: NormalizedFloorPlanDetection[];
+  projectFloorPlanDetectionImage: { width: number; height: number } | null;
+  projectFloorPlanDetectionLoading: boolean;
+  projectFloorPlanDetectionError: string | null;
+  /** Dual-panel sheet crop regions (from Roboflow or client detect). */
+  projectFloorPlanPanelInsets: StoredPlanPanelInset[];
   /** Floor-plan-only path: single furnished overview render. */
   projectFurnishedPlanRender: { base64: string; mimeType: string } | null;
   projectFurnishedPlanStatus: "pending" | "generating" | "review" | "error" | null;
@@ -452,6 +469,8 @@ interface ConsumerDesignState {
   setProjectError: (error: string | null) => void;
   setHasPdf: (has: boolean) => void;
   setProjectAnalysis: (analysis: FloorPlanAnalysis | null) => void;
+  setProjectGraph: (graph: FloorPlanGraph | null) => void;
+  setDevAutoEditPlan: (on: boolean) => void;
   setSelectedFloorPlanRoomId: (roomId: string | null) => void;
   setProjectSuggestedRoomOrder: (order: string[]) => void;
   setProjectHubView: (view: ProjectHubView) => void;
@@ -459,6 +478,14 @@ interface ConsumerDesignState {
   setProjectAnalysisProgress: (progress: number, message?: string) => void;
   setProjectUtilityEntryPoints: (points: UtilityEntryPoint[]) => void;
   setProjectDraftRooms: (rooms: DetectedRoom[]) => void;
+  setProjectExpandDrawOnUpload: (expand: boolean) => void;
+  setProjectFloorPlanDetections: (
+    detections: NormalizedFloorPlanDetection[],
+    image?: { width: number; height: number } | null,
+  ) => void;
+  setProjectFloorPlanDetectionLoading: (loading: boolean) => void;
+  setProjectFloorPlanDetectionError: (error: string | null) => void;
+  setProjectFloorPlanPanelInsets: (panels: StoredPlanPanelInset[]) => void;
   resetProject: () => void;
   resetQuickRoom: () => void;
 
@@ -574,7 +601,7 @@ const initialState = {
   selectedStyle: "modern",
   designMode: "custom" as "made" | "custom",
   placementMode: "redesign" as QuickRoomPlacementMode,
-  shapeCreativity: 5,
+  shapeCreativity: DEFAULT_SHAPE_CREATIVITY,
   quickRoomView: "compose" as "compose" | "result",
   generatedImageBase64: null as string | null,
   generatedImageMimeType: null as string | null,
@@ -630,6 +657,8 @@ const initialState = {
   } as UserPreferences,
   projectId: null as string | null,
   projectAnalysis: null as FloorPlanAnalysis | null,
+  projectGraph: null as FloorPlanGraph | null,
+  devAutoEditPlan: false,
   projectConcept: null as ProjectConceptSummary | null,
   projectRooms: [] as RoomResult[],
   currentProjectRoomIndex: 0,
@@ -643,6 +672,12 @@ const initialState = {
   projectAnalysisProgress: 0,
   projectAnalysisMessage: "",
   projectDraftRooms: [] as DetectedRoom[],
+  projectExpandDrawOnUpload: false,
+  projectFloorPlanDetections: [] as NormalizedFloorPlanDetection[],
+  projectFloorPlanDetectionImage: null as { width: number; height: number } | null,
+  projectFloorPlanDetectionLoading: false,
+  projectFloorPlanDetectionError: null as string | null,
+  projectFloorPlanPanelInsets: [] as StoredPlanPanelInset[],
   projectFurnishedPlanRender: null as { base64: string; mimeType: string } | null,
   projectFurnishedPlanStatus: null as "pending" | "generating" | "review" | "error" | null,
   projectFurnishedPlanError: null as string | null,
@@ -1107,7 +1142,7 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
     set({
       projectId: data.id,
       projectError: data.error ?? null,
-      ...(data.analysis !== undefined ? { projectAnalysis: data.analysis } : {}),
+      ...(data.analysis !== undefined ? { projectAnalysis: data.analysis, projectGraph: null } : {}),
       ...(data.concept !== undefined ? { projectConcept: data.concept } : {}),
       ...(data.rooms !== undefined ? { projectRooms: data.rooms } : {}),
       ...(data.currentRoomIndex !== undefined ? { currentProjectRoomIndex: data.currentRoomIndex } : {}),
@@ -1137,6 +1172,8 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
   setProjectError: (error) => set({ projectError: error }),
   setHasPdf: (has) => set({ hasPdf: has }),
   setProjectAnalysis: (analysis) => set({ projectAnalysis: analysis }),
+  setProjectGraph: (graph) => set({ projectGraph: graph }),
+  setDevAutoEditPlan: (on) => set({ devAutoEditPlan: on }),
   setSelectedFloorPlanRoomId: (roomId) => set({ selectedFloorPlanRoomId: roomId }),
   setProjectSuggestedRoomOrder: (order) => set({ projectSuggestedRoomOrder: order }),
   setProjectHubView: (view) => set({ projectHubView: view }),
@@ -1149,6 +1186,16 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
 
   setProjectUtilityEntryPoints: (points) => set({ projectUtilityEntryPoints: points }),
   setProjectDraftRooms: (rooms) => set({ projectDraftRooms: rooms }),
+  setProjectExpandDrawOnUpload: (expand) => set({ projectExpandDrawOnUpload: expand }),
+  setProjectFloorPlanDetections: (detections, image) =>
+    set({
+      projectFloorPlanDetections: detections,
+      projectFloorPlanDetectionImage: image ?? null,
+      projectFloorPlanDetectionError: null,
+    }),
+  setProjectFloorPlanDetectionLoading: (loading) => set({ projectFloorPlanDetectionLoading: loading }),
+  setProjectFloorPlanDetectionError: (error) => set({ projectFloorPlanDetectionError: error }),
+  setProjectFloorPlanPanelInsets: (panels) => set({ projectFloorPlanPanelInsets: panels }),
 
   resetProject: () => {
     if (typeof window !== "undefined") {
@@ -1169,6 +1216,8 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
       },
       projectId: null,
       projectAnalysis: null,
+      projectGraph: null,
+      devAutoEditPlan: false,
       projectConcept: null,
       projectRooms: [],
       currentProjectRoomIndex: 0,
@@ -1183,6 +1232,12 @@ export const useConsumerDesignStore = create<ConsumerDesignState>((set) => ({
       projectAnalysisMessage: "",
       projectUtilityEntryPoints: [],
       projectDraftRooms: [],
+      projectExpandDrawOnUpload: false,
+      projectFloorPlanDetections: [],
+      projectFloorPlanDetectionImage: null,
+      projectFloorPlanDetectionLoading: false,
+      projectFloorPlanDetectionError: null,
+      projectFloorPlanPanelInsets: [],
       projectFurnishedPlanRender: null,
       projectFurnishedPlanStatus: null,
       projectFurnishedPlanError: null,

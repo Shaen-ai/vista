@@ -15,9 +15,9 @@ test("clampShapeCreativity rounds and clamps to 0..10", () => {
   assert.equal(clampShapeCreativity("nope"), DEFAULT_SHAPE_CREATIVITY);
 });
 
-test("parseShapeCreativityParam defaults to 5 when missing", () => {
-  assert.equal(parseShapeCreativityParam(null), 5);
-  assert.equal(parseShapeCreativityParam(""), 5);
+test("parseShapeCreativityParam defaults when missing", () => {
+  assert.equal(parseShapeCreativityParam(null), DEFAULT_SHAPE_CREATIVITY);
+  assert.equal(parseShapeCreativityParam(""), DEFAULT_SHAPE_CREATIVITY);
   assert.equal(parseShapeCreativityParam("7"), 7);
 });
 

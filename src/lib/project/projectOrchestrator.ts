@@ -39,6 +39,7 @@ import {
   emptyRoomPhases,
 } from "./types";
 import { analyzeFloorPlan } from "./floorPlanAnalyzer";
+import type { RoboflowFloorPlanDetectResult } from "./roboflowFloorPlanDetect";
 import { getStylePresetOrDefault } from "./stylePresets";
 import {
   buildRoomFloorPlanContext,
@@ -667,6 +668,8 @@ export interface AnalysisInput extends ProjectInput {
   /** Optional rasterized image of the drawn plan (rooms + doors + windows), sent to Claude. */
   drawnPlanBase64?: string;
   drawnPlanMimeType?: string;
+  /** Optional Roboflow payload from client upload overlay (skips server re-inference). */
+  clientRoboflow?: RoboflowFloorPlanDetectResult;
 }
 
 function spatialCompletePayload(state: ProjectState) {
@@ -755,6 +758,12 @@ export async function initializeSpatialAnalysis(
       input.manualAnalysis,
       seeded ? undefined : input.drawnPlanBase64,
       seeded ? undefined : input.drawnPlanMimeType,
+      {
+        clientRoboflow: input.clientRoboflow ?? null,
+        onProgress: (progress, message) => {
+          onProgress?.({ phase: "floor_plan", message, progress });
+        },
+      },
     );
     state.analysis = analysis;
     state.status = "reviewing";
@@ -2390,37 +2399,64 @@ async function ensurePhotoOpeningAnalysis(opts: {
   }
 }
 
+/**
+ * Run `fn` over `items` with at most `limit` in flight at once. Simple worker-pool
+ * implementation — avoids firing every item's paid API call simultaneously.
+ */
+async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 /** Fire-and-forget opening analysis for all uploaded photos (warms cache before generation). */
 function prefetchPhotoOpeningAnalyses(state: ProjectState, projectId: string): void {
   const photos = state.uploadedPhotos.filter((p) => p.base64?.trim() && !p.openingAnalysis);
   if (photos.length === 0) return;
 
-  void (async () => {
-    await Promise.allSettled(
-      photos.map(async (photo) => {
-        const result = await analyzePhotoOpenings({
-          photoBase64: photo.base64,
-          photoMime: photo.mimeType,
-          photoId: photo.id,
-          projectId,
-          roomId: photo.roomId,
-        });
-        if (!result) return;
-        const fresh = await getProject(projectId);
-        if (!fresh) return;
-        const uploaded = fresh.uploadedPhotos.find((p) => p.id === photo.id);
-        if (!uploaded || uploaded.openingAnalysis) return;
-        uploaded.openingAnalysis = result;
-        await setProject(fresh);
-        pipelineLog("ROOM_OPENINGS", "prefetched photo opening analysis", {
-          projectId,
-          photoId: photo.id,
-          windows: result.window_boxes.length,
-          doors: result.door_boxes.length,
-        });
-      }),
-    );
-  })();
+  // Throttled to a small concurrency instead of firing every photo's OpenAI call at
+  // once — an unbounded fan-out here could burst up to MAX_ROOM_PHOTOS (35)
+  // simultaneous vision calls (each independently retry-capable) for one upload.
+  const PHOTO_PREFETCH_CONCURRENCY = 4;
+
+  void mapWithConcurrency(photos, PHOTO_PREFETCH_CONCURRENCY, async (photo) => {
+    try {
+      const result = await analyzePhotoOpenings({
+        photoBase64: photo.base64,
+        photoMime: photo.mimeType,
+        photoId: photo.id,
+        projectId,
+        roomId: photo.roomId,
+      });
+      if (!result) return;
+      const fresh = await getProject(projectId);
+      if (!fresh) return;
+      const uploaded = fresh.uploadedPhotos.find((p) => p.id === photo.id);
+      if (!uploaded || uploaded.openingAnalysis) return;
+      uploaded.openingAnalysis = result;
+      await setProject(fresh);
+      pipelineLog("ROOM_OPENINGS", "prefetched photo opening analysis", {
+        projectId,
+        photoId: photo.id,
+        windows: result.window_boxes.length,
+        doors: result.door_boxes.length,
+      });
+    } catch (err) {
+      // Matches the original Promise.allSettled semantics: one photo's failure
+      // must not stop the others in the pool.
+      pipelineLog(
+        "ROOM_OPENINGS",
+        "photo opening analysis prefetch failed",
+        { projectId, photoId: photo.id, error: err instanceof Error ? err.message : String(err) },
+        "warn",
+      );
+    }
+  });
 }
 
 async function generateRoomViaEditPipeline(opts: {

@@ -7,6 +7,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { confirmFloorPlan, getProject, type ConfirmPlanInput } from "@/lib/project/projectOrchestrator";
 
+// Server-side mirror of the client's MAX_ROOM_PHOTOS (ProjectMode.tsx) and a sane room
+// cap — the client enforces these in the UI, but a direct API call could otherwise
+// bypass them and multiply per-photo/per-room render cost with no ceiling.
+const MAX_PHOTOS = 35;
+const MAX_ROOMS = 30;
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -23,6 +29,19 @@ export async function POST(
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  if (body.photos && body.photos.length > MAX_PHOTOS) {
+    return NextResponse.json(
+      { error: `Too many photos (max ${MAX_PHOTOS}) — please remove some and try again.` },
+      { status: 400 },
+    );
+  }
+  if (body.analysis?.rooms && body.analysis.rooms.length > MAX_ROOMS) {
+    return NextResponse.json(
+      { error: `Too many rooms (max ${MAX_ROOMS}) — please simplify the floor plan and try again.` },
+      { status: 400 },
+    );
   }
 
   try {

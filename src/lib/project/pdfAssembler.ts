@@ -19,7 +19,7 @@ import {
 import { planTitle } from "@/i18n/planTitle";
 import { translate } from "@/i18n/translate";
 import { DEFAULT_LOCALE, isVistaLocale, type VistaLocale } from "@/i18n/locales";
-import type { ProjectState, RoomResult, TechnicalDrawingsSet } from "./types";
+import type { ProjectState, RoomResult, TechnicalDrawingsSet, TechnicalPlanData } from "./types";
 import { renderAllPlans } from "./technicalDrawings";
 import { prepareApprovedWallElevations } from "./approvedRoomPlanBuilder";
 import { renderAllElevations } from "./elevationGenerator";
@@ -66,6 +66,26 @@ const KEPT_PLAN_KEYS: (keyof TechnicalDrawingsSet)[] = [
   "electrical",
   "plumbing",
   "gas",
+];
+
+/**
+ * Ordered technical-plan sheets emitted to the PDF. Keys index the
+ * `renderAllPlans` output (which includes the derived `redevelopment`,
+ * `switches`, `sockets` sheets). The combined `electrical` sheet is intentionally
+ * replaced by the switches + sockets split. Each sheet reuses an existing
+ * section toggle so no new PdfSectionKey is needed. Sheets whose SVG is absent
+ * (plumbing with no wet rooms, gas with no inlet) are skipped automatically.
+ */
+const PDF_PLAN_SHEETS: { key: string; section: PdfSectionKey; fallbackTitle: string }[] = [
+  { key: "measurement", section: "measurement", fallbackTitle: "Measurement Plan" },
+  { key: "redevelopment", section: "measurement", fallbackTitle: "Redevelopment Plan" },
+  { key: "furnitureLayout", section: "furnitureLayout", fallbackTitle: "Furniture Layout" },
+  { key: "flooring", section: "flooring", fallbackTitle: "Flooring Plan" },
+  { key: "lighting", section: "lighting", fallbackTitle: "Lighting Plan" },
+  { key: "switches", section: "electrical", fallbackTitle: "Switches Layout" },
+  { key: "sockets", section: "electrical", fallbackTitle: "Sockets Layout" },
+  { key: "plumbing", section: "plumbing", fallbackTitle: "Water & Drainage" },
+  { key: "gas", section: "gas", fallbackTitle: "Gas Supply" },
 ];
 
 /**
@@ -877,17 +897,17 @@ function ProjectDocument({
   }
 
   if (project.technicalDrawings) {
-    for (const key of KEPT_PLAN_KEYS) {
-      if (!sections[key as PdfSectionKey]) continue;
-      if (key === "plumbing" && !hasWetRooms(project.analysis)) continue;
-      const png = techPngs[key];
+    const stored = project.technicalDrawings as unknown as Record<string, TechnicalPlanData | undefined>;
+    for (const sheet of PDF_PLAN_SHEETS) {
+      if (!sections[sheet.section]) continue;
+      const png = techPngs[sheet.key];
       if (!png) continue;
-      const plan = project.technicalDrawings[key];
+      const title = stored[sheet.key]?.title ?? sheet.fallbackTitle;
       pages.push(
         React.createElement(TechnicalPlanPage, {
-          key: `tech-${key}`,
+          key: `tech-${sheet.key}`,
           title: planTitle(
-            { key: TECH_PLAN_KEY[key] ?? key, title: plan.title, titleRu: plan.title, svg: null },
+            { key: TECH_PLAN_KEY[sheet.key] ?? sheet.key, title, titleRu: title, svg: null },
             locale,
           ),
           svgDataUri: png,
@@ -977,12 +997,12 @@ export async function assemblePDF(project: ProjectState, options?: AssemblePdfOp
       {} as Record<string, { fixtures: number; furniture: number; zones: number; hasSvg: boolean }>,
     );
     await Promise.all(
-      KEPT_PLAN_KEYS.map(async (key) => {
-        if (!sections[key as PdfSectionKey]) return;
-        const svg = svgs[key];
+      PDF_PLAN_SHEETS.map(async (sheet) => {
+        if (!sections[sheet.section]) return;
+        const svg = svgs[sheet.key];
         if (!svg) return;
         const png = await svgToPngDataUri(svg, PDF_PLAN_RASTER_WIDTH);
-        if (png) techPngs[key] = png;
+        if (png) techPngs[sheet.key] = png;
       }),
     );
   }

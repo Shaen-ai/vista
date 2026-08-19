@@ -66,7 +66,7 @@ export function ModeProjectHub({ mode, createPath, hubPath }: ModeProjectHubProp
 
   useEffect(() => {
     if (!getAuthToken()) {
-      router.replace(createPath);
+      router.replace("/");
       return;
     }
     let cancelled = false;

@@ -1,6 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import dynamic from "next/dynamic";
 import {
   Search,
@@ -1054,9 +1063,22 @@ export type VistaHomeVariant = "landing" | "quick-workspace" | "project-workspac
 export interface VistaHomePageProps {
   variant?: VistaHomeVariant;
   hubPath?: string;
+  /** `/project/new` — do not restore IndexedDB session (avoids stale traced/analysis drawings). */
+  freshProjectWorkspace?: boolean;
 }
 
-export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePageProps = {}) {
+export function VistaHomePage({
+  variant = "landing",
+  hubPath,
+  freshProjectWorkspace = false,
+}: VistaHomePageProps = {}) {
+  const freshProjectResetRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!freshProjectWorkspace || freshProjectResetRef.current) return;
+    freshProjectResetRef.current = true;
+    useConsumerDesignStore.getState().resetProject();
+  }, [freshProjectWorkspace]);
+
   const router = useRouter();
   const {
     searchQuery,
@@ -1214,7 +1236,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
   const catalogSidebarEnabled = variant === "quick-workspace" && catalogAvailable;
   const [showLanding, setShowLanding] = useState(variant === "landing");
   const { restoring: restoringProjectSession } = useProjectSessionRestore({
-    skip: variant !== "project-workspace",
+    skip: variant !== "project-workspace" || freshProjectWorkspace,
   });
 
   useEffect(() => {
@@ -3698,7 +3720,7 @@ export function VistaHomePage({ variant = "landing", hubPath }: VistaHomePagePro
               type="button"
               className="cd-back-link"
               onClick={() => {
-                if (hubPath) {
+                if (hubPath && getAuthToken()) {
                   router.push(hubPath);
                 } else {
                   router.push("/");

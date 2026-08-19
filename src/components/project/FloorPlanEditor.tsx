@@ -2,8 +2,23 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Plus, Minus, Maximize2, Scan, Hand, Trash2, Magnet, CornerUpLeft, PenTool, Check, X, AppWindow, DoorOpen, Undo2, Redo2, GripVertical } from "lucide-react";
-import type { DetectedRoom, FloorPlanAnalysis, PlanColumn, RoomType } from "@/lib/project/types";
+import type { DetectedRoom, FloorPlanAnalysis, PlanColumn, RoomType, UtilityEntryPoint, UtilityPointType } from "@/lib/project/types";
 import { ROOM_TYPES } from "@/lib/project/types";
+import {
+  type FloorPlanGraph,
+  type WallOpening,
+  graphFromAnalysis,
+  moveNode as graphMoveNode,
+  moveWall as graphMoveWall,
+  moveRoom as graphMoveRoom,
+  addOpening as graphAddOpening,
+  updateOpening as graphUpdateOpening,
+  removeOpening as graphRemoveOpening,
+  nodeIdForRoomVertex,
+  wallForRoomEdge,
+  nearestWallToPoint,
+  findWallOpening,
+} from "@/lib/project/floorPlanGraph";
 import {
   computeBounds,
   type Bounds,
@@ -29,7 +44,9 @@ import {
   pointAlongEdge,
   nearestEdgeToPoint,
   describeOpening,
+  remapOpeningToPolygon,
   inferConnectsTo,
+  edgeOutwardNormal,
   openingEndpoints,
   isValidEdgeIndex,
   repairOpeningAnchors,
@@ -48,6 +65,10 @@ import {
   formatEdgeLengthLabel,
   formatFootprint,
 } from "@/lib/project/floorPlanEditorI18n";
+import type { LengthUnit } from "@/lib/project/areaUnits";
+import { displayLengthToMetres, metresToDisplayLength } from "@/lib/project/areaUnits";
+import { roomFloorLevel } from "@/lib/project/floorPlanFloors";
+import { computeFloorBounds, isPointInFloorBounds } from "@/lib/project/floorPlanFloorView";
 
 const MIN_SCALE = 0.1; // how far the room view can zoom out (toward / past the whole plan)
 const MAX_SCALE = 8; // how far in
@@ -109,6 +130,27 @@ interface FloorPlanEditorProps {
   isMobile?: boolean;
   /** Persist edited structural columns (when omitted, columns are read-only). */
   onColumnsChange?: (columns: PlanColumn[]) => void;
+  /**
+   * Normalized editing graph. When supplied together with `onGraphChange`, the editor
+   * runs in "graph mode": shared corners/walls are one object, so dragging them moves
+   * BOTH adjacent rooms, and a door on a shared wall is edited once. `analysis` is still
+   * the (derived) render source; every edit emits a new graph via `onGraphChange`.
+   */
+  graph?: FloorPlanGraph | null;
+  onGraphChange?: (graph: FloorPlanGraph) => void;
+  /** Linear dimensions shown/edited in metres (default) or feet; geometry stays metric internally. */
+  lengthUnit?: LengthUnit;
+  /** When false, hide the uploaded scan under the vector plan (review hero layout). */
+  showPlanImage?: boolean;
+  /** When set, zoom and show only this floor’s rooms/openings. */
+  floorLevel?: 1 | 2;
+  /** Larger canvas for post-analyze review. */
+  variant?: "default" | "reviewHero";
+  utilityPoints?: UtilityEntryPoint[];
+  activePlacementType?: UtilityPointType | null;
+  onPlaceUtility?: (type: UtilityPointType, x: number, y: number) => void;
+  activeViewpointPhotoId?: string | null;
+  onPlaceViewpoint?: (x: number, y: number) => void;
 }
 
 type OpeningKind = "window" | "door";
@@ -203,9 +245,71 @@ export default function FloorPlanEditor({
   focusRoomId,
   isMobile = false,
   onColumnsChange,
+  graph = null,
+  onGraphChange,
+  lengthUnit = "m",
+  showPlanImage = true,
+  floorLevel,
+  variant = "default",
+  utilityPoints = [],
+  activePlacementType = null,
+  onPlaceUtility,
+  activeViewpointPhotoId = null,
+  onPlaceViewpoint,
 }: FloorPlanEditorProps) {
   const { t } = useTranslation();
   const svgRef = useRef<SVGSVGElement>(null);
+  // --- Graph mode ----------------------------------------------------------
+  // When a graph + onGraphChange are provided, the normalized graph is the edit
+  // source of truth: shared corners/walls/doors are single objects. `analysis`
+  // remains the render source (the parent keeps it = graphToAnalysis(graph)).
+  const graphMode = !!(graph && onGraphChange);
+  const graphRef = useRef<FloorPlanGraph | null>(graph);
+  graphRef.current = graph;
+  const analysisRef = useRef<FloorPlanAnalysis>(analysis);
+  analysisRef.current = analysis;
+  // Graph undo/redo history (parallel to the rooms history used in non-graph mode).
+  const [graphHistory, setGraphHistory] = useState<{ past: FloorPlanGraph[]; future: FloorPlanGraph[] }>({
+    past: [],
+    future: [],
+  });
+  // Pre-drag graph snapshot, captured on pointerdown and recorded once on release.
+  const dragGraphBaseRef = useRef<FloorPlanGraph | null>(null);
+
+  // Emit a new graph. `snapshot` (when given) is pushed to undo history first.
+  const commitGraph = useCallback(
+    (next: FloorPlanGraph, snapshot?: FloorPlanGraph) => {
+      if (snapshot) setGraphHistory((h) => ({ past: [...h.past, snapshot], future: [] }));
+      onGraphChange?.(next);
+    },
+    [onGraphChange],
+  );
+
+  // Apply a rooms-array transform through the graph (for structural ops: insert/delete
+  // vertex, resize, add/draw/delete room). Rebuilds the graph so shared walls re-unify.
+  const commitRoomsViaGraph = useCallback(
+    (nextRooms: DetectedRoom[]) => {
+      const g = graphRef.current;
+      if (!g) return;
+      setGraphHistory((h) => ({ past: [...h.past, g], future: [] }));
+      commitGraph(graphFromAnalysis({ ...analysisRef.current, rooms: nextRooms }));
+    },
+    [commitGraph],
+  );
+
+  // Mode-aware emission for room-structural edits (add/draw/delete room, insert/
+  // delete vertex, resize, meta). Graph mode rebuilds the graph (re-unifying shared
+  // walls) and owns undo; non-graph mode passes straight through to `onRoomsChange`.
+  const commitNextRooms = useCallback(
+    (nextRooms: DetectedRoom[]) => {
+      if (graphMode) {
+        commitRoomsViaGraph(nextRooms);
+        return;
+      }
+      onRoomsChange(nextRooms);
+    },
+    [graphMode, commitRoomsViaGraph, onRoomsChange],
+  );
   // Active pointers (for two-finger pinch) + the in-progress pinch / pan gestures.
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchRef = useRef<{ startDist: number; startScale: number; anchor: Point } | null>(null);
@@ -216,16 +320,24 @@ export default function FloorPlanEditor({
   const dragBoundsRef = useRef<Bounds | null>(null);
   const rooms = useMemo(() => analysis.rooms.map(repairOpeningAnchors), [analysis.rooms]);
   const columns = analysis.columns ?? [];
-  // Prefer an explicit drawing canvas, then the image frame the auto-detect
-  // analyzer recorded (so the overlay sits on the uploaded plan 1:1), and only
-  // fall back to the rooms' bounding box for legacy analyses without a frame.
+  // Full scan page (mm) for underlay placement and pan/zoom limits.
   const extentMm = canvasExtentMm ?? analysis.imageFrame ?? null;
-  const fullBounds = useMemo(
+  const imageFrameBounds = useMemo(
     () =>
       extentMm
         ? { minX: 0, minY: 0, maxX: extentMm.width, maxY: extentMm.height }
-        : computeBounds(analysis),
-    [analysis, extentMm],
+        : null,
+    [extentMm],
+  );
+  const contentBounds = useMemo(() => {
+    if (floorLevel != null) {
+      return computeFloorBounds(analysis, floorLevel, utilityPoints);
+    }
+    return computeBounds(analysis, utilityPoints);
+  }, [analysis, floorLevel, utilityPoints]);
+  const fullBounds = useMemo(
+    () => imageFrameBounds ?? contentBounds,
+    [imageFrameBounds, contentBounds],
   );
   // When confirming one room at a time, zoom the canvas to that room (its bbox
   // padded by ~14%) so it fills the screen — essential on phones. The plan image
@@ -237,12 +349,13 @@ export default function FloorPlanEditor({
         : null,
     [focusRoomId, rooms],
   );
-  // The auto-fit base view always frames the whole plan, even when one room is focused, so the
-  // canvas never starts zoomed into a small room — that heavy zoom (combined with whole-plan pan
-  // clamping) made dragging feel chaotic. The focused room stays highlighted and editable; users
-  // can still zoom into it manually via the controls. Manual zoom/pan (`view`) layers on top of
-  // this — see `bounds` below.
-  const baseBounds = fullBounds;
+  // Default view fits room geometry (not empty scan margins). Fixed `canvasExtentMm`
+  // keeps the full drawing canvas for manual 1:1 overlay editing.
+  const baseBounds = canvasExtentMm && imageFrameBounds ? imageFrameBounds : contentBounds;
+  const planZoomEnabled = Boolean(focusRoom || (variant === "reviewHero" && !canvasExtentMm));
+  const svgPlanUnderlay = Boolean(
+    showPlanImage && imageFrameBounds && (focusRoom || !canvasExtentMm),
+  );
 
   // Manual zoom/pan applied over the base fit. `null` = the auto-fit base view.
   const [view, setView] = useState<ViewTransform | null>(null);
@@ -350,26 +463,44 @@ export default function FloorPlanEditor({
     setHistory((h) => ({ past: [...h.past, snapshot], future: [] }));
   }, []);
 
-  const canUndo = history.past.length > 0;
-  const canRedo = history.future.length > 0;
+  const canUndo = graphMode ? graphHistory.past.length > 0 : history.past.length > 0;
+  const canRedo = graphMode ? graphHistory.future.length > 0 : history.future.length > 0;
 
   const undo = useCallback(() => {
+    if (graphMode) {
+      if (graphHistory.past.length === 0 || !graphRef.current) return;
+      const prev = graphHistory.past[graphHistory.past.length - 1];
+      setGraphHistory({ past: graphHistory.past.slice(0, -1), future: [...graphHistory.future, graphRef.current] });
+      setSelectedVertex(null);
+      setSelectedOpening(null);
+      onGraphChange?.(prev);
+      return;
+    }
     if (history.past.length === 0) return;
     const prev = history.past[history.past.length - 1];
     setHistory({ past: history.past.slice(0, -1), future: [...history.future, rooms] });
     setSelectedVertex(null);
     setSelectedOpening(null);
     onRoomsChange(prev);
-  }, [history, rooms, onRoomsChange]);
+  }, [graphMode, graphHistory, history, rooms, onRoomsChange, onGraphChange]);
 
   const redo = useCallback(() => {
+    if (graphMode) {
+      if (graphHistory.future.length === 0 || !graphRef.current) return;
+      const next = graphHistory.future[graphHistory.future.length - 1];
+      setGraphHistory({ past: [...graphHistory.past, graphRef.current], future: graphHistory.future.slice(0, -1) });
+      setSelectedVertex(null);
+      setSelectedOpening(null);
+      onGraphChange?.(next);
+      return;
+    }
     if (history.future.length === 0) return;
     const next = history.future[history.future.length - 1];
     setHistory({ past: [...history.past, rooms], future: history.future.slice(0, -1) });
     setSelectedVertex(null);
     setSelectedOpening(null);
     onRoomsChange(next);
-  }, [history, rooms, onRoomsChange]);
+  }, [graphMode, graphHistory, history, rooms, onRoomsChange, onGraphChange]);
 
   // Ctrl/⌘+Z undo · Ctrl/⌘+Shift+Z or Ctrl+Y redo. Ignored while tracing or typing.
   useEffect(() => {
@@ -444,6 +575,25 @@ export default function FloorPlanEditor({
   /** Drop a new window/door on the wall nearest to `mm`, across all rooms. */
   const placeOpening = useCallback(
     (kind: OpeningKind, mm: Point) => {
+      // Graph mode: drop the opening on the nearest shared/exterior wall as ONE object.
+      if (graphMode && graphRef.current) {
+        const near = nearestWallToPoint(graphRef.current, mm);
+        if (!near) {
+          setOpeningPlaceHint(fpT(t, "placeOpeningHintNoRoom"));
+          return;
+        }
+        setOpeningPlaceHint(null);
+        // width/height are stored in METRES (same unit as DetectedRoom openings).
+        const next = graphAddOpening(graphRef.current, near.wall.id, {
+          type: kind,
+          t: near.t,
+          width: kind === "window" ? DEFAULT_WINDOW_W : DEFAULT_DOOR_W,
+          height: kind === "window" ? 1.5 : undefined,
+          confirmed: true,
+        });
+        commitGraph(next, graphRef.current);
+        return;
+      }
       // Guided per-room mode: only that room. Otherwise prefer the selected room when
       // the click is near its wall, then fall back to the globally nearest wall so a tap
       // anywhere still lands an opening on the closest wall (matches the room-drag model).
@@ -482,7 +632,7 @@ export default function FloorPlanEditor({
       }
       onRoomSelect(room.id);
     },
-    [rooms, focusRoom, selectedRoomId, bounds, nearestOpeningTarget, mutateOpenings, onRoomSelect, t],
+    [rooms, focusRoom, selectedRoomId, bounds, nearestOpeningTarget, mutateOpenings, onRoomSelect, t, graphMode, commitGraph],
   );
 
   const placeOpeningAtClient = useCallback(
@@ -497,12 +647,68 @@ export default function FloorPlanEditor({
     [openingMode, bounds, placeOpening],
   );
 
+  // Map a rendered opening (roomId, kind, index) back to its single graph WallOpening
+  // by geometry (its midpoint on the room's wall). Graph mode only.
+  const graphOpeningRef = useCallback(
+    (ref: OpeningRef): { wallId: string; openingId: string; same: boolean; edgeIndex: number } | null => {
+      const g = graphRef.current;
+      if (!g) return null;
+      const room = rooms.find((r) => r.id === ref.roomId);
+      const list = ref.kind === "window" ? room?.windows : room?.doors;
+      const o = list?.[ref.index];
+      if (!room?.polygon || !o || o.edgeIndex === undefined) return null;
+      const mid = pointAlongEdge(room.polygon, o.edgeIndex, o.t ?? 0.5);
+      const found = findWallOpening(g, mid, ref.kind === "window" ? "window" : "door");
+      if (!found) return null;
+      const we = wallForRoomEdge(g, ref.roomId, o.edgeIndex);
+      return { ...found, same: we?.same ?? true, edgeIndex: o.edgeIndex };
+    },
+    [rooms],
+  );
+
+  // Build a winding-free door-orientation patch (hinge a/b, swingSide) for the graph
+  // WallOpening from a room-relative hinge/swing edit. Graph mode only.
+  const graphDoorPatch = useCallback(
+    (ref: OpeningRef, edit: { hinge?: "left" | "right"; swing?: "in" | "out" }): { wallId: string; openingId: string; patch: Partial<WallOpening> } | null => {
+      const g = graphRef.current;
+      if (!g) return null;
+      const gref = graphOpeningRef(ref);
+      const room = rooms.find((r) => r.id === ref.roomId);
+      if (!gref || !room?.polygon) return null;
+      const wall = g.walls.find((w) => w.id === gref.wallId);
+      if (!wall) return null;
+      const patch: Partial<WallOpening> = { confirmed: true };
+      if (edit.hinge) {
+        patch.hinge = gref.same ? (edit.hinge === "left" ? "a" : "b") : edit.hinge === "left" ? "b" : "a";
+      }
+      if (edit.swing) {
+        const a = g.nodes.find((n) => n.id === wall.a);
+        const b = g.nodes.find((n) => n.id === wall.b);
+        if (a && b) {
+          const [onx, ony] = edgeOutwardNormal(room.polygon, gref.edgeIndex);
+          const [sx, sy] = edit.swing === "out" ? [onx, ony] : [-onx, -ony];
+          const cross = (b.x - a.x) * sy - (b.y - a.y) * sx;
+          patch.swingSide = cross > 0 ? "left" : "right";
+        }
+      }
+      return { wallId: gref.wallId, openingId: gref.openingId, patch };
+    },
+    [graphOpeningRef, rooms],
+  );
+
   /** Slide an existing opening to a new fraction along its wall (keeps it on the same edge). */
   const setOpeningT = useCallback(
     (ref: OpeningRef, t: number) => {
       const room = rooms.find((r) => r.id === ref.roomId);
       const poly = room?.polygon;
       if (!poly) return;
+      if (graphMode && graphRef.current) {
+        const gref = graphOpeningRef(ref);
+        if (!gref) return;
+        const tWall = gref.same ? t : 1 - t; // room-edge fraction → wall A→B fraction
+        commitGraph(graphUpdateOpening(graphRef.current, gref.wallId, gref.openingId, { t: tWall, confirmed: true }));
+        return;
+      }
       mutateOpenings(ref.roomId, ref.kind, (list) => {
         const o = list[ref.index];
         if (!o || o.edgeIndex === undefined) return;
@@ -514,12 +720,21 @@ export default function FloorPlanEditor({
         }
       });
     },
-    [rooms, mutateOpenings],
+    [rooms, mutateOpenings, graphMode, commitGraph, graphOpeningRef],
   );
 
   const setOpeningWidth = useCallback(
     (ref: OpeningRef, metres: number) => {
       if (!Number.isFinite(metres) || metres <= 0) return;
+      if (graphMode && graphRef.current) {
+        const gref = graphOpeningRef(ref);
+        if (!gref) return;
+        commitGraph(
+          graphUpdateOpening(graphRef.current, gref.wallId, gref.openingId, { width: metres, confirmed: true }),
+          graphRef.current,
+        );
+        return;
+      }
       mutateOpenings(ref.roomId, ref.kind, (list) => {
         const o = list[ref.index];
         if (o) {
@@ -528,12 +743,21 @@ export default function FloorPlanEditor({
         }
       });
     },
-    [mutateOpenings],
+    [mutateOpenings, graphMode, commitGraph, graphOpeningRef],
   );
 
   const setOpeningHeight = useCallback(
     (ref: OpeningRef, metres: number) => {
       if (!Number.isFinite(metres) || metres <= 0) return;
+      if (graphMode && graphRef.current) {
+        const gref = graphOpeningRef(ref);
+        if (!gref) return;
+        commitGraph(
+          graphUpdateOpening(graphRef.current, gref.wallId, gref.openingId, { height: metres, confirmed: true }),
+          graphRef.current,
+        );
+        return;
+      }
       mutateOpenings(ref.roomId, ref.kind, (list) => {
         const o = list[ref.index];
         if (o) {
@@ -542,11 +766,17 @@ export default function FloorPlanEditor({
         }
       });
     },
-    [mutateOpenings],
+    [mutateOpenings, graphMode, commitGraph, graphOpeningRef],
   );
 
   const setDoorHinge = useCallback(
     (ref: OpeningRef, hinge: "left" | "right") => {
+      if (graphMode && graphRef.current) {
+        const gp = graphDoorPatch(ref, { hinge });
+        if (!gp) return;
+        commitGraph(graphUpdateOpening(graphRef.current, gp.wallId, gp.openingId, gp.patch), graphRef.current);
+        return;
+      }
       mutateOpenings(ref.roomId, "door", (list) => {
         const o = list[ref.index] as DetectedRoom["doors"][number] | undefined;
         if (o) {
@@ -555,11 +785,17 @@ export default function FloorPlanEditor({
         }
       });
     },
-    [mutateOpenings],
+    [mutateOpenings, graphMode, commitGraph, graphDoorPatch],
   );
 
   const setDoorSwing = useCallback(
     (ref: OpeningRef, swing: "in" | "out") => {
+      if (graphMode && graphRef.current) {
+        const gp = graphDoorPatch(ref, { swing });
+        if (!gp) return;
+        commitGraph(graphUpdateOpening(graphRef.current, gp.wallId, gp.openingId, gp.patch), graphRef.current);
+        return;
+      }
       mutateOpenings(ref.roomId, "door", (list) => {
         const o = list[ref.index] as DetectedRoom["doors"][number] | undefined;
         if (o) {
@@ -568,25 +804,27 @@ export default function FloorPlanEditor({
         }
       });
     },
-    [mutateOpenings],
+    [mutateOpenings, graphMode, commitGraph, graphDoorPatch],
   );
 
   const removeOpening = useCallback(
     (ref: OpeningRef) => {
+      if (graphMode && graphRef.current) {
+        const gref = graphOpeningRef(ref);
+        if (gref) commitGraph(graphRemoveOpening(graphRef.current, gref.wallId, gref.openingId), graphRef.current);
+        setSelectedOpening(null);
+        return;
+      }
       mutateOpenings(ref.roomId, ref.kind, (list) => list.splice(ref.index, 1));
       setSelectedOpening(null);
     },
-    [mutateOpenings],
+    [mutateOpenings, graphMode, commitGraph, graphOpeningRef],
   );
 
   /** Re-anchor a room's openings after its polygon topology changed (vertex add/remove). */
   const reanchorOpenings = useCallback((room: DetectedRoom, oldPoly: Point[], newPoly: Point[]) => {
-    const remap = <T extends { edgeIndex?: number; t?: number; position: string }>(o: T): T => {
-      if (o.edgeIndex === undefined || oldPoly.length < 2 || newPoly.length < 2) return o;
-      const world = pointAlongEdge(oldPoly, o.edgeIndex, o.t ?? 0.5);
-      const near = nearestEdgeToPoint(newPoly, world);
-      return { ...o, edgeIndex: near.edgeIndex, t: near.t, position: describeOpening(newPoly, near.edgeIndex, near.t) };
-    };
+    const remap = <T extends { edgeIndex?: number; t?: number; position: string }>(o: T): T =>
+      remapOpeningToPolygon(o, oldPoly, newPoly);
     return {
       windows: room.windows.map(remap),
       doors: room.doors.map((d) => {
@@ -641,9 +879,9 @@ export default function FloorPlanEditor({
             }
           : r,
       );
-      onRoomsChange(next);
+      commitNextRooms(next);
     },
-    [rooms, onRoomsChange, drag, recordSnapshot],
+    [rooms, commitNextRooms, drag, recordSnapshot],
   );
 
   // Replace a room's polygon AND re-anchor its openings (use when the corner count may
@@ -652,7 +890,7 @@ export default function FloorPlanEditor({
   const setRoomPolygonReanchored = useCallback(
     (room: DetectedRoom, newPoly: Point[]) => {
       const { windows, doors } = reanchorOpenings(room, room.polygon ?? [], newPoly);
-      onRoomsChange(
+      commitNextRooms(
         rooms.map((r) =>
           r.id === room.id
             ? {
@@ -667,7 +905,7 @@ export default function FloorPlanEditor({
         ),
       );
     },
-    [rooms, reanchorOpenings, onRoomsChange],
+    [rooms, reanchorOpenings, commitNextRooms],
   );
 
   // Begin a pan gesture, capturing the view + pointer baseline.
@@ -746,6 +984,13 @@ export default function FloorPlanEditor({
         // A freshly inserted corner sits collinear on a straight wall; dragging it must move
         // only that corner (freeform) so the user can pull a real corner out — otherwise the
         // rectilinear slide moves the whole wall and the corner gets reabsorbed on release.
+        // Graph mode: move the shared node directly — every room using this corner
+        // follows (free grid-snapped move; both rooms stay joined).
+        if (graphMode && graphRef.current) {
+          const nodeId = nodeIdForRoomVertex(graphRef.current, drag.roomId, drag.vertexIndex);
+          if (nodeId) commitGraph(graphMoveNode(graphRef.current, nodeId, target[0], target[1]));
+          return;
+        }
         const freeform =
           advanced ||
           !isRectilinearPolygon(room.polygon) ||
@@ -769,6 +1014,21 @@ export default function FloorPlanEditor({
       }
 
       const [dx, dy] = snapDelta(mm[0] - drag.startMm[0], mm[1] - drag.startMm[1], GRID_MM);
+      // Graph mode: translate applied from the pre-drag baseline graph so the total
+      // delta is idempotent per frame; shared corners/walls carry both rooms along.
+      if (graphMode && dragGraphBaseRef.current) {
+        const base = dragGraphBaseRef.current;
+        if (drag.kind === "room") {
+          commitGraph(graphMoveRoom(base, drag.roomId, dx, dy));
+          return;
+        }
+        // Edge: perpendicular push (keeps rectilinear rooms axis-aligned) of the wall's
+        // two nodes — a shared wall moves for both adjacent rooms.
+        const [pdx, pdy] = wallPerpendicularDelta(drag.startPoly, drag.edgeIndex, dx, dy);
+        const we = wallForRoomEdge(base, drag.roomId, drag.edgeIndex);
+        if (we) commitGraph(graphMoveWall(base, we.wall.id, pdx, pdy));
+        return;
+      }
       if (drag.kind === "room") {
         updateRoom(drag.roomId, translatePolygon(drag.startPoly, dx, dy));
         return;
@@ -787,10 +1047,22 @@ export default function FloorPlanEditor({
       const pushed = orthogonalEdgePush(drag.startPoly, drag.edgeIndex, pdx, pdy);
       setRoomPolygonReanchored(room, pushed);
     },
-    [drag, drawMode, advanced, bounds, doPan, rooms, updateRoom, setRoomPolygonReanchored, setOpeningT],
+    [drag, drawMode, advanced, bounds, doPan, rooms, updateRoom, setRoomPolygonReanchored, setOpeningT, graphMode, commitGraph],
   );
 
   const endDrag = useCallback(() => {
+    // Graph mode: record the pre-drag graph as one undo step (per-frame edits were
+    // committed without a snapshot). Node/wall moves preserve topology, so no tidy.
+    if (graphMode) {
+      const base = dragGraphBaseRef.current;
+      if (drag && base && graphRef.current && graphRef.current !== base) {
+        setGraphHistory((h) => ({ past: [...h.past, base], future: [] }));
+      }
+      dragGraphBaseRef.current = null;
+      setDrag(null);
+      dragBoundsRef.current = null;
+      return;
+    }
     // Commit the whole drag as a single undo step: the baseline captured on
     // pointerdown is recorded once here (per-frame changes were skipped above).
     if (drag && rooms !== drag.baseline) {
@@ -807,7 +1079,7 @@ export default function FloorPlanEditor({
     }
     setDrag(null);
     dragBoundsRef.current = null;
-  }, [drag, rooms, advanced, recordSnapshot, setRoomPolygonReanchored]);
+  }, [drag, rooms, advanced, recordSnapshot, setRoomPolygonReanchored, graphMode]);
 
   // --- Zoom / pan ------------------------------------------------------------
   // Set the view to `newScale` while keeping `anchor` (mm) pinned under the screen
@@ -873,7 +1145,7 @@ export default function FloorPlanEditor({
     const svg = svgRef.current;
     if (!svg) return;
     const onWheel = (e: WheelEvent) => {
-      if (!focusRoom) return; // only the per-room view zooms (bg image lives in the SVG there)
+      if (!planZoomEnabled) return;
       e.preventDefault();
       const anchor = worldAtClient(svg, e.clientX, e.clientY);
       if (!anchor) return;
@@ -884,13 +1156,13 @@ export default function FloorPlanEditor({
     // mid-gesture — that staleness was the source of the zoom jitter.
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
-  }, [focusRoom, domScale, setViewAnchored]);
+  }, [planZoomEnabled, domScale, setViewAnchored]);
 
   // Two-finger pinch — tracked in the capture phase on the container so it wins over
   // child element drags. A second finger cancels any in-progress single-pointer drag.
   const onContainerPointerDownCapture = useCallback(
     (e: React.PointerEvent) => {
-      if (!focusRoom) return; // manual zoom/pan only in the per-room focus view
+      if (!planZoomEnabled) return;
       pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointersRef.current.size === 2 && svgRef.current) {
         const svg = svgRef.current;
@@ -908,7 +1180,7 @@ export default function FloorPlanEditor({
         }
       }
     },
-    [focusRoom, domScale],
+    [planZoomEnabled, domScale],
   );
   const onContainerPointerMoveCapture = useCallback(
     (e: React.PointerEvent) => {
@@ -943,11 +1215,11 @@ export default function FloorPlanEditor({
         features: [],
         polygon: poly,
       };
-      onRoomsChange([...rooms, newRoom]);
+      commitNextRooms([...rooms, newRoom]);
       onRoomSelect(id);
       setSelectedVertex(null);
     },
-    [rooms, analysis.ceilingHeight, onRoomsChange, onRoomSelect, recordSnapshot],
+    [rooms, analysis.ceilingHeight, commitNextRooms, onRoomSelect, recordSnapshot],
   );
 
   const addRoom = useCallback(() => {
@@ -1061,6 +1333,18 @@ export default function FloorPlanEditor({
 
   const handleSvgClick = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
+      if (svgRef.current) {
+        if (activePlacementType && onPlaceUtility) {
+          const mm = screenToMm(svgRef.current, e.clientX, e.clientY, bounds);
+          if (mm) onPlaceUtility(activePlacementType, mm[0], mm[1]);
+          return;
+        }
+        if (activeViewpointPhotoId && onPlaceViewpoint) {
+          const mm = screenToMm(svgRef.current, e.clientX, e.clientY, bounds);
+          if (mm) onPlaceViewpoint(mm[0], mm[1]);
+          return;
+        }
+      }
       if (openingMode) {
         placeOpeningAtClient(e.clientX, e.clientY);
         return;
@@ -1086,7 +1370,7 @@ export default function FloorPlanEditor({
       );
       setDraftPoints((pts) => [...pts, snapped]);
     },
-    [openingMode, placeOpeningAtClient, drawMode, bounds, draftPoints, snapTargets, edgeTargets, commitDraft],
+    [openingMode, placeOpeningAtClient, drawMode, bounds, draftPoints, snapTargets, edgeTargets, commitDraft, activePlacementType, onPlaceUtility, activeViewpointPhotoId, onPlaceViewpoint],
   );
 
   useEffect(() => {
@@ -1107,10 +1391,10 @@ export default function FloorPlanEditor({
   const deleteRoom = useCallback(() => {
     if (!selectedRoomId) return;
     recordSnapshot(rooms);
-    onRoomsChange(rooms.filter((r) => r.id !== selectedRoomId));
+    commitNextRooms(rooms.filter((r) => r.id !== selectedRoomId));
     onRoomSelect(null);
     setSelectedVertex(null);
-  }, [selectedRoomId, rooms, onRoomsChange, onRoomSelect, recordSnapshot]);
+  }, [selectedRoomId, rooms, commitNextRooms, onRoomSelect, recordSnapshot]);
 
   // Update a room's polygon AND re-anchor its openings (use when corners are
   // added/removed so edge indices stay valid and openings keep their wall).
@@ -1130,9 +1414,9 @@ export default function FloorPlanEditor({
             }
           : r,
       );
-      onRoomsChange(next);
+      commitNextRooms(next);
     },
-    [rooms, reanchorOpenings, onRoomsChange, recordSnapshot],
+    [rooms, reanchorOpenings, commitNextRooms, recordSnapshot],
   );
 
   const insertVertex = useCallback(
@@ -1205,8 +1489,8 @@ export default function FloorPlanEditor({
           }
         : r,
     );
-    onRoomsChange(next);
-  }, [rooms, onRoomsChange, recordSnapshot]);
+    commitNextRooms(next);
+  }, [rooms, commitNextRooms, recordSnapshot]);
 
   // Type an exact wall length (metres). The traced outline must NOT be skewed — only its
   // size changes:
@@ -1258,9 +1542,9 @@ export default function FloorPlanEditor({
             }
           : r,
       );
-      onRoomsChange(next);
+      commitNextRooms(next);
     },
-    [selectedRoom, rooms, onRoomsChange, recordSnapshot],
+    [selectedRoom, rooms, commitNextRooms, recordSnapshot],
   );
 
   return (
@@ -1396,10 +1680,18 @@ export default function FloorPlanEditor({
       <div className="flex flex-col lg:flex-row gap-3 lg:items-start">
         <div className="flex-1 min-w-0">
       <div
-        className={`relative w-full ${focusRoom || extentMm ? "" : "aspect-[4/3]"}`}
+        className={`relative w-full ${
+          variant === "reviewHero"
+            ? "min-h-[min(72vh,800px)]"
+            : focusRoom || canvasExtentMm
+              ? ""
+              : "aspect-[4/3]"
+        }`}
         style={
-          focusRoom
-            ? { aspectRatio: `${baseBounds.maxX - baseBounds.minX} / ${baseBounds.maxY - baseBounds.minY}` }
+          focusRoom || !canvasExtentMm
+            ? {
+                aspectRatio: `${baseBounds.maxX - baseBounds.minX} / ${baseBounds.maxY - baseBounds.minY}`,
+              }
             : extentMm
               ? { aspectRatio: `${extentMm.width} / ${extentMm.height}` }
               : undefined
@@ -1414,7 +1706,7 @@ export default function FloorPlanEditor({
         <div className="absolute inset-0 rounded-2xl overflow-hidden border border-[var(--border)] bg-[var(--muted)]">
         {/* When focusing one room we zoom the SVG viewBox, so the plan image must
             live inside the SVG to zoom with it. Otherwise keep it as a plain bg img. */}
-        {!focusRoom && (
+        {!svgPlanUnderlay && showPlanImage && (
           <img
             src={floorPlanImageSrc}
             alt="Floor plan"
@@ -1425,7 +1717,9 @@ export default function FloorPlanEditor({
           ref={svgRef}
           viewBox={viewBox}
           className={`absolute inset-0 w-full h-full ${drag ? "cursor-grabbing" : ""} ${
-            drawMode || openingMode ? "cursor-crosshair" : ""
+            drawMode || openingMode || activePlacementType || activeViewpointPhotoId
+              ? "cursor-crosshair"
+              : ""
           }`}
           style={{ touchAction: "none" }}
           preserveAspectRatio="xMidYMid meet"
@@ -1435,19 +1729,20 @@ export default function FloorPlanEditor({
           onPointerLeave={handleSvgPointerLeave}
           onClick={handleSvgClick}
         >
-          {focusRoom && (
+          {svgPlanUnderlay && imageFrameBounds && (
             <image
               href={floorPlanImageSrc}
-              x={fullBounds.minX}
-              y={flipY(fullBounds.maxY, bounds)}
-              width={fullBounds.maxX - fullBounds.minX}
-              height={fullBounds.maxY - fullBounds.minY}
+              x={imageFrameBounds.minX}
+              y={flipY(imageFrameBounds.maxY, bounds)}
+              width={imageFrameBounds.maxX - imageFrameBounds.minX}
+              height={imageFrameBounds.maxY - imageFrameBounds.minY}
               preserveAspectRatio="xMidYMid meet"
               opacity={0.6}
               style={{ pointerEvents: "none" }}
             />
           )}
           {rooms.map((room) => {
+            if (floorLevel != null && roomFloorLevel(room) !== floorLevel) return null;
             const poly = room.polygon;
             if (!poly || poly.length < 3) return null;
             const isDimmed = !!focusRoom && room.id !== focusRoom.id;
@@ -1481,6 +1776,7 @@ export default function FloorPlanEditor({
                     const mm = screenToMm(svgRef.current, e.clientX, e.clientY, bounds);
                     if (mm) {
                       dragBoundsRef.current = bounds;
+                      dragGraphBaseRef.current = graphRef.current;
                       setDrag({ kind: "room", roomId: room.id, startMm: mm, startPoly: poly, baseline: rooms });
                     }
                   }}
@@ -1524,6 +1820,8 @@ export default function FloorPlanEditor({
                             const mm = screenToMm(svgRef.current, e.clientX, e.clientY, bounds);
                             if (mm) {
                               dragBoundsRef.current = bounds;
+                      dragGraphBaseRef.current = graphRef.current;
+                              dragGraphBaseRef.current = graphRef.current;
                               setDrag({ kind: "edge", roomId: room.id, edgeIndex: i, startMm: mm, startPoly: poly, baseline: rooms });
                             }
                           }}
@@ -1578,6 +1876,8 @@ export default function FloorPlanEditor({
                         (e.target as SVGElement).setPointerCapture?.(e.pointerId);
                         setSelectedVertex(i);
                         dragBoundsRef.current = bounds;
+                      dragGraphBaseRef.current = graphRef.current;
+                        dragGraphBaseRef.current = graphRef.current;
                         setDrag({ kind: "vertex", roomId: room.id, vertexIndex: i, baseline: rooms });
                       }}
                     />
@@ -1683,6 +1983,7 @@ export default function FloorPlanEditor({
 
           {/* Openings (windows/doors): read-only glyphs + interactive overlay. */}
           {rooms.map((room) => {
+            if (floorLevel != null && roomFloorLevel(room) !== floorLevel) return null;
             const isDimmed = !!focusRoom && room.id !== focusRoom.id;
             return (
               <g key={`op-${room.id}`} style={isDimmed ? { opacity: 0.3 } : undefined}>
@@ -1691,6 +1992,9 @@ export default function FloorPlanEditor({
             );
           })}
           {columns.map((col) => {
+            if (floorLevel != null && !isPointInFloorBounds(analysis, floorLevel, col.x, col.y)) {
+              return null;
+            }
             const displayY = flipY(col.y, bounds);
             const half = columnHalfSizeMm(col);
             const isCircle = col.shape === "circular";
@@ -1712,6 +2016,7 @@ export default function FloorPlanEditor({
                             e.stopPropagation();
                             (e.currentTarget as SVGElement).setPointerCapture?.(e.pointerId);
                             dragBoundsRef.current = bounds;
+                      dragGraphBaseRef.current = graphRef.current;
                             const svg = svgRef.current;
                             if (!svg || !onColumnsChange) return;
                             const move = (ev: PointerEvent) => {
@@ -1749,6 +2054,7 @@ export default function FloorPlanEditor({
                             e.stopPropagation();
                             (e.currentTarget as SVGElement).setPointerCapture?.(e.pointerId);
                             dragBoundsRef.current = bounds;
+                      dragGraphBaseRef.current = graphRef.current;
                             const svg = svgRef.current;
                             if (!svg || !onColumnsChange) return;
                             const move = (ev: PointerEvent) => {
@@ -1841,6 +2147,8 @@ export default function FloorPlanEditor({
                           setSelectedVertex(null);
                           setSelectedOpening({ roomId: room.id, kind, index });
                           dragBoundsRef.current = bounds;
+                      dragGraphBaseRef.current = graphRef.current;
+                          dragGraphBaseRef.current = graphRef.current;
                           setDrag({ kind: "opening", roomId: room.id, openingKind: kind, index, baseline: rooms });
                         }}
                       />
@@ -1939,10 +2247,8 @@ export default function FloorPlanEditor({
         </svg>
         </div>
 
-        {/* Zoom controls — overlaid on the plan so the user can zoom out to see the
-            whole floor plan while reviewing one room, then zoom back in. Per-room view
-            only (in the overview the whole plan is already visible). */}
-        {focusRoom && (
+        {/* Zoom controls — overview review and per-room focus can zoom/pan. */}
+        {planZoomEnabled && (
           <div className="absolute right-2 top-2 z-20 flex flex-col gap-1.5">
             <ZoomButton onClick={() => zoomByStep(2)} label={fpT(t, "zoomIn")}>
               <Plus size={16} />
@@ -1968,7 +2274,7 @@ export default function FloorPlanEditor({
 
         {/* Hand tool: a transparent surface over the plan so dragging anywhere pans the
             whole plan (room/opening editing is suppressed while it's active). */}
-        {focusRoom && panMode && (
+        {planZoomEnabled && panMode && (
           <div
             className="absolute inset-0 z-10 cursor-grab active:cursor-grabbing touch-none"
             onPointerDown={(e) => {
@@ -2077,6 +2383,7 @@ export default function FloorPlanEditor({
                       : undefined
                   }
                   onRemove={() => removeOpening(selectedOpening)}
+                  lengthUnit={lengthUnit}
                 />
               </div>
             );
@@ -2126,16 +2433,22 @@ export default function FloorPlanEditor({
                   label={formatEdgeLengthLabel(
                     `${cornerLabel(i)}–${cornerLabel((i + 1) % roomPoly.length)}`,
                     t,
+                    lengthUnit,
                   )}
                   value={Math.round((edgeLengthMm(roomPoly, i) / 1000) * 100) / 100}
                   onCommit={(m) => resizeEdge(i, m)}
+                  lengthUnit={lengthUnit}
                 />
               ))}
             </div>
               );
             })()}
             <div className="grid grid-cols-3 gap-3">
-              <HeightInput value={selectedRoom.dimensions.height} onChange={(h) => updateSelectedMeta({ height: h })} />
+              <HeightInput
+                value={selectedRoom.dimensions.height}
+                onChange={(h) => updateSelectedMeta({ height: h })}
+                lengthUnit={lengthUnit}
+              />
               <div className="col-span-2 flex flex-col gap-1">
                 <span className="text-[10px] uppercase text-[var(--muted-foreground)]">{fpT(t, "footprint")}</span>
                 <div className="px-2 py-1.5 rounded-lg bg-[var(--muted)]/50 border border-[var(--border)] text-sm text-[var(--muted-foreground)]">
@@ -2144,6 +2457,7 @@ export default function FloorPlanEditor({
                     selectedRoom.dimensions.depth,
                     selectedRoom.estimatedArea,
                     t,
+                    lengthUnit,
                   )}
                 </div>
               </div>
@@ -2196,6 +2510,7 @@ export default function FloorPlanEditor({
                     edgeLengthMm={openingEdgeLengthMm(selectedRoom.polygon, w.edgeIndex)}
                     onPositionT={(t) => setOpeningT({ roomId: selectedRoom.id, kind: "window", index: i }, t)}
                     onRemove={() => removeOpening({ roomId: selectedRoom.id, kind: "window", index: i })}
+                    lengthUnit={lengthUnit}
                   />
                 ),
               )}
@@ -2231,6 +2546,7 @@ export default function FloorPlanEditor({
                       onSwing: (s) => setDoorSwing({ roomId: selectedRoom.id, kind: "door", index: i }, s),
                     }}
                     onRemove={() => removeOpening({ roomId: selectedRoom.id, kind: "door", index: i })}
+                    lengthUnit={lengthUnit}
                   />
                 ),
               )}
@@ -2339,6 +2655,7 @@ function OpeningRow({
   edgeLengthMm: edgeLen,
   onPositionT,
   door,
+  lengthUnit = "m",
 }: {
   icon: React.ReactNode;
   title: string;
@@ -2357,8 +2674,10 @@ function OpeningRow({
     onHinge: (hinge: "left" | "right") => void;
     onSwing: (swing: "in" | "out") => void;
   };
+  lengthUnit?: LengthUnit;
 }) {
   const { t } = useTranslation();
+  const lenAbbr = lengthUnit === "ft" ? fpT(t, "footAbbr") : fpT(t, "metreAbbr");
   const posMetres = positionT !== undefined && edgeLen
     ? Math.round((positionT * edgeLen) / 10) / 100
     : undefined;
@@ -2380,15 +2699,16 @@ function OpeningRow({
         <span className="pl-6 text-[10px] text-[var(--muted-foreground)] truncate">{subtitle}</span>
       )}
       <div className="flex items-center gap-3 pl-6 flex-wrap">
-        <SizeField label={fpT(t, "widthAbbr")} value={width} onCommit={onWidth} metreAbbr={fpT(t, "metreAbbr")} />
+        <SizeField label={fpT(t, "widthAbbr")} value={width} onCommit={onWidth} lengthUnit={lengthUnit} lenAbbr={lenAbbr} />
         {onHeight && height !== undefined && (
-          <SizeField label={fpT(t, "heightAbbr")} value={height} onCommit={onHeight} metreAbbr={fpT(t, "metreAbbr")} />
+          <SizeField label={fpT(t, "heightAbbr")} value={height} onCommit={onHeight} lengthUnit={lengthUnit} lenAbbr={lenAbbr} />
         )}
         {posMetres !== undefined && onPositionT && edgeLen && (
           <SizeField
             label={fpT(t, "positionAbbr")}
             value={posMetres}
-            metreAbbr={fpT(t, "metreAbbr")}
+            lenAbbr={lenAbbr}
+            lengthUnit={lengthUnit}
             onCommit={(m) => {
               const t = Math.min(1, Math.max(0, (m * 1000) / edgeLen));
               onPositionT(t);
@@ -2412,18 +2732,35 @@ function OpeningRow({
   );
 }
 
-/** Compact labelled metre input for an opening dimension. */
+/** Compact labelled length input for an opening dimension (stored internally in metres). */
 function SizeField({
   label,
   value,
   onCommit,
-  metreAbbr,
+  lenAbbr,
+  lengthUnit = "m",
 }: {
   label: string;
   value: number;
   onCommit: (metres: number) => void;
-  metreAbbr: string;
+  lenAbbr: string;
+  lengthUnit?: LengthUnit;
 }) {
+  const display = metresToDisplayLength(value, lengthUnit);
+  const [draft, setDraft] = useState(String(display));
+  const [lastValue, setLastValue] = useState(display);
+
+  if (display !== lastValue) {
+    setLastValue(display);
+    setDraft(String(display));
+  }
+
+  const commit = () => {
+    const next = Number(draft);
+    if (Number.isFinite(next) && next > 0) onCommit(displayLengthToMetres(next, lengthUnit));
+    else setDraft(String(display));
+  };
+
   return (
     <label className="flex items-center gap-1">
       <span className="text-[10px] text-[var(--muted-foreground)]">{label}</span>
@@ -2431,15 +2768,16 @@ function SizeField({
         type="number"
         step="0.1"
         min="0"
-        value={value}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          if (Number.isFinite(n) && n > 0) onCommit(n);
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
         }}
         className="w-14 px-2 py-1 rounded-lg bg-[var(--muted)] border border-[var(--border)] text-xs"
-        aria-label={`${label} (${metreAbbr})`}
+        aria-label={`${label} (${lenAbbr})`}
       />
-      <span className="text-[10px] text-[var(--muted-foreground)]">{metreAbbr}</span>
+      <span className="text-[10px] text-[var(--muted-foreground)]">{lenAbbr}</span>
     </label>
   );
 }
@@ -2453,25 +2791,28 @@ function DimensionInput({
   label,
   value,
   onCommit,
+  lengthUnit = "m",
 }: {
   label: string;
   value: number;
   onCommit: (metres: number) => void;
+  lengthUnit?: LengthUnit;
 }) {
-  const [draft, setDraft] = useState(String(value));
-  const [lastValue, setLastValue] = useState(value);
+  const display = metresToDisplayLength(value, lengthUnit);
+  const [draft, setDraft] = useState(String(display));
+  const [lastValue, setLastValue] = useState(display);
 
   // Resync the buffer when the value changes from elsewhere (dragging, snap, reset).
   // Adjusting state during render is React's recommended alternative to a setState effect.
-  if (value !== lastValue) {
-    setLastValue(value);
-    setDraft(String(value));
+  if (display !== lastValue) {
+    setLastValue(display);
+    setDraft(String(display));
   }
 
   const commit = () => {
     const next = Number(draft);
-    if (Number.isFinite(next) && next > 0) onCommit(next);
-    else setDraft(String(value)); // revert invalid input
+    if (Number.isFinite(next) && next > 0) onCommit(displayLengthToMetres(next, lengthUnit));
+    else setDraft(String(display)); // revert invalid input
   };
 
   return (
@@ -2494,16 +2835,40 @@ function DimensionInput({
 }
 
 /** Ceiling-height field — live numeric input (no shape geometry, so it commits on change). */
-function HeightInput({ value, onChange }: { value: number; onChange: (height: number) => void }) {
+function HeightInput({
+  value,
+  onChange,
+  lengthUnit = "m",
+}: {
+  value: number;
+  onChange: (height: number) => void;
+  lengthUnit?: LengthUnit;
+}) {
   const { t } = useTranslation();
+  const display = metresToDisplayLength(value, lengthUnit);
+  const [draft, setDraft] = useState(String(display));
+  const [lastValue, setLastValue] = useState(display);
+
+  if (display !== lastValue) {
+    setLastValue(display);
+    setDraft(String(display));
+  }
+
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase text-[var(--muted-foreground)]">{fpT(t, "height")}</span>
+      <span className="text-[10px] uppercase text-[var(--muted-foreground)]">
+        {lengthUnit === "ft" ? fpT(t, "heightFt") : fpT(t, "height")}
+      </span>
       <input
         type="number"
         step="0.1"
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        value={draft}
+        onChange={(e) => {
+          const raw = e.target.value;
+          setDraft(raw);
+          const n = Number(raw);
+          if (Number.isFinite(n) && n > 0) onChange(displayLengthToMetres(n, lengthUnit));
+        }}
         className="px-2 py-1.5 rounded-lg bg-[var(--muted)] border border-[var(--border)] text-sm"
       />
     </label>

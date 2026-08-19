@@ -1036,7 +1036,7 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
   // resolution, no merchant appendix, no product links — but the room geometry
   // (dimensions, windows, doors, camera) is still grounded via textPrompt,
   // roomAnalysis/roomGeometry, baseImage, and the opening structural lock.
-  if (freeRender) {
+  const renderWithoutCatalog = async (): Promise<PhasedRoomResult> => {
     if (!baseImage && phase !== "base") {
       return { ok: false, status: 400, error: "Previous-phase image is required for this phase.", ...empty };
     }
@@ -1131,7 +1131,28 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
     }
 
     return { ok: true, ...empty, images, allPhaseProductIds: previousPhaseProducts };
-  }
+  };
+
+  const fallbackToFreeRender = async (reason: string): Promise<PhasedRoomResult> => {
+    pipelineLog(
+      "CATALOG_RESOLVE",
+      "made-mode fallback to catalog-free render",
+      { phase, roomType, reason },
+      "warn",
+    );
+    const result = await renderWithoutCatalog();
+    if (!result.ok || previousPhaseProducts.length === 0) return result;
+    const linkNumericIds = numericIdsFromMpKeys(previousPhaseProducts);
+    const productLinks =
+      linkNumericIds.length > 0
+        ? sortProductsForDisplay(await fetchProductPurchaseLinks(linkNumericIds))
+        : [];
+    return { ...result, productLinks };
+  };
+
+  if (freeRender) return renderWithoutCatalog();
+
+  const madeOrCompact = madeMode || compactProductFlow;
 
   const catalogCtx = await buildConsumerDesignCatalogContext({
     marketplaceProductIds: marketplaceNumericIds,
@@ -1143,6 +1164,7 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
   });
 
   if (catalogCtx.summaryById.size === 0) {
+    if (madeOrCompact) return fallbackToFreeRender("catalog_empty");
     return { ok: false, status: 422, error: "No products available in our catalog for this design phase.", ...empty };
   }
 
@@ -1156,7 +1178,6 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
   // Resolve catalog slots filtered to this phase. Ready-made ("made") uses the
   // reduced flooring+furniture kit (<=4 shoppable products, no lighting/accessory
   // slots) so lampshades/picture frames can't displace the hero furniture.
-  const madeOrCompact = madeMode || compactProductFlow;
   const slotTemplate = madeOrCompact
     ? getMadeModeRoomSlots(roomType, roomAnalysis?.window_count)
     : getRoomSlotTemplate(roomType, roomAnalysis?.window_count);
@@ -1167,6 +1188,7 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
   const phaseSlots = filterSlotsForMadePhase(allSlots, phase, compactProductFlow);
 
   if (phaseSlots.length === 0 && pinnedProductIds.length === 0) {
+    if (madeOrCompact) return fallbackToFreeRender("no_phase_slots");
     return {
       ok: false,
       status: 422,
@@ -1256,6 +1278,7 @@ export async function generatePhasedRoom(input: PhasedRoomInput): Promise<Phased
   selectedForGemini = selectedForGemini.slice(0, limit);
 
   if (selectedForGemini.length === 0 && inspirationItems.length === 0 && phase !== "base") {
+    if (madeOrCompact) return fallbackToFreeRender("no_matching_products");
     return { ok: false, status: 422, error: `Could not find matching products for the "${phase}" phase.`, ...empty };
   }
 

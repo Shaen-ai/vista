@@ -31,6 +31,7 @@ import {
   isValidEdgeIndex,
   sanitizePolygon,
   repairOpeningAnchors,
+  remapOpeningToPolygon,
   type Point,
 } from "./floorPlanGeometry";
 import type { DetectedRoom, UtilityEntryPoint } from "./types";
@@ -547,4 +548,41 @@ test("repairOpeningAnchors re-anchors OOB edgeIndex from position text", () => {
   assert.ok(repaired.doors[0].edgeIndex! >= 0);
   assert.ok(repaired.doors[0].edgeIndex! < poly.length);
   assert.equal(isValidEdgeIndex(poly, repaired.doors[0].edgeIndex!), true);
+});
+
+test("remapOpeningToPolygon keeps an opening on its true wall after a vertex merge", () => {
+  // Old polygon has an extra collinear vertex on the bottom edge; the door sits
+  // on the second bottom segment. snapAndCloseGaps merges that vertex, which
+  // shifts every later edgeIndex — the door must follow its world position, not
+  // its stale edgeIndex (which would land it on the right wall).
+  const oldPoly: Point[] = [
+    [0, 0],
+    [500, 0],
+    [1000, 0],
+    [1000, 1000],
+    [0, 1000],
+  ];
+  const newPoly: Point[] = [
+    [0, 0],
+    [1000, 0],
+    [1000, 1000],
+    [0, 1000],
+  ];
+  // Door on edge 1 (500,0)->(1000,0) at t=0.5 → world (750, 0).
+  const door = { position: "south wall center", width: 0.9, connectsTo: "x", edgeIndex: 1, t: 0.5 };
+  const out = remapOpeningToPolygon(door, oldPoly, newPoly);
+  assert.equal(out.edgeIndex, 0); // bottom edge of the merged polygon
+  assert.ok(Math.abs((out.t ?? -1) - 0.75) < 0.01); // 750 / 1000
+});
+
+test("remapOpeningToPolygon leaves an unanchored opening untouched", () => {
+  const poly: Point[] = [
+    [0, 0],
+    [1000, 0],
+    [1000, 1000],
+    [0, 1000],
+  ];
+  const door = { position: "south", width: 0.9, connectsTo: "x" };
+  const out = remapOpeningToPolygon(door, poly, poly);
+  assert.equal(out, door);
 });

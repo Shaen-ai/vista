@@ -223,10 +223,14 @@ function parseRoomBrief(v: unknown): RoomDesignBrief | null {
   const wc = isRecord(v.wallColor) ? v.wallColor : {};
   const fc = isRecord(v.furnitureColor) ? v.furnitureColor : null;
   const wallColor = { hex: asStr(wc.hex, "#E0DDD8"), ncs: asStr(wc.ncs, "NCS-S-1002-Y") };
+  const roomType = asStr(v.roomType, "other") as RoomType;
+  const rawAngles = Array.isArray(v.renderAngles)
+    ? v.renderAngles.filter((x): x is string => typeof x === "string")
+    : [];
   return {
     roomId: asStr(v.roomId, ""),
     roomName: asStr(v.roomName, ""),
-    roomType: asStr(v.roomType, "other") as RoomType,
+    roomType,
     wallColor,
     furnitureColor: fc ? parseColorPair(fc, wallColor) : undefined,
     floorMaterial: asStr(v.floorMaterial, ""),
@@ -238,9 +242,10 @@ function parseRoomBrief(v: unknown): RoomDesignBrief | null {
     keyDesignElements: Array.isArray(v.keyDesignElements)
       ? v.keyDesignElements.filter((x): x is string => typeof x === "string")
       : [],
-    renderAngles: Array.isArray(v.renderAngles)
-      ? v.renderAngles.filter((x): x is string => typeof x === "string")
-      : [],
+    // Defense against a verbose/malformed LLM response: each extra angle drives one
+    // more paid render call downstream, so cap at the intended count for this room
+    // type rather than trusting the array length Claude returned.
+    renderAngles: rawAngles.slice(0, angleCountForRoom(roomType, 0)),
     specialNotes: asStr(v.specialNotes, ""),
   };
 }

@@ -44,6 +44,7 @@ export const PIPELINE_STEPS = {
   PIPELINE_STAGE: "7·pipeline-stage",
   FAL_DEBUG: "7·fal-debug",
   PRODUCT_IMAGES: "6·product-images",
+  CATALOG_RESOLVE: "6·catalog-resolve",
   FINISH_ROOM: "8·finish-room",
   VALIDATE: "8·validate-structure",
   CROSS_VIEW_QC: "9·cross-view-qc",

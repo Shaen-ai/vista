@@ -61,6 +61,7 @@ import type {
 } from "./types";
 import { hasWetRooms } from "./pdfDataHelpers";
 import { applyApprovedRoomPlans } from "./approvedRoomPlanBuilder";
+import { diffWalls } from "./wallDiff";
 
 function buildTechnicalPlansPrompt(
   analysis: FloorPlanAnalysis,
@@ -1183,6 +1184,141 @@ function roomZonesFromAnalysis(analysis: FloorPlanAnalysis | null): RoomZone[] {
     }));
 }
 
+// ---------------------------------------------------------------------------
+// Derived sheets — switches, sockets, redevelopment (not part of TechnicalDrawingsSet)
+// ---------------------------------------------------------------------------
+
+/** Titles for the derived sheets keyed the way `renderAllPlans` emits them. */
+export const DERIVED_PLAN_TITLES: Record<string, string> = {
+  redevelopment: "REDEVELOPMENT PLAN",
+  switches: "SWITCHES PLAN",
+  sockets: "SOCKETS PLAN",
+};
+
+function isSwitchFixture(f: FixturePlacement): boolean {
+  return f.type.toLowerCase().includes("switch");
+}
+
+/** Filter electrical fixtures + remap circuit-group indices to the filtered array. */
+function filterElectrical(
+  fixtures: FixturePlacement[],
+  groups: CircuitGroup[] | undefined,
+  keep: (f: FixturePlacement) => boolean,
+): { fixtures: FixturePlacement[]; circuitGroups: CircuitGroup[] } {
+  const kept: FixturePlacement[] = [];
+  const oldToNew = new Map<number, number>();
+  fixtures.forEach((f, i) => {
+    if (keep(f)) {
+      oldToNew.set(i, kept.length);
+      kept.push(f);
+    }
+  });
+  const circuitGroups: CircuitGroup[] = (groups ?? [])
+    .map((g) => ({
+      ...g,
+      fixtureIndices: g.fixtureIndices
+        .map((i) => oldToNew.get(i))
+        .filter((i): i is number => i != null),
+    }))
+    .filter((g) => g.fixtureIndices.length > 0);
+  return { fixtures: kept, circuitGroups };
+}
+
+function deriveSwitchesPlan(electrical: TechnicalPlanData): TechnicalPlanData {
+  const { fixtures, circuitGroups } = filterElectrical(
+    electrical.fixtures ?? [],
+    electrical.circuitGroups,
+    isSwitchFixture,
+  );
+  return {
+    planType: "switches",
+    title: DERIVED_PLAN_TITLES.switches,
+    walls: electrical.walls,
+    fixtures,
+    circuitGroups,
+    roomZones: electrical.roomZones,
+  };
+}
+
+function deriveSocketsPlan(electrical: TechnicalPlanData): TechnicalPlanData {
+  const { fixtures, circuitGroups } = filterElectrical(
+    electrical.fixtures ?? [],
+    electrical.circuitGroups,
+    (f) => !isSwitchFixture(f),
+  );
+  return {
+    planType: "sockets",
+    title: DERIVED_PLAN_TITLES.sockets,
+    walls: electrical.walls,
+    fixtures,
+    circuitGroups,
+    roomZones: electrical.roomZones,
+  };
+}
+
+/**
+ * Redevelopment (перепланировка) sheet. Compares the proposed layout
+ * (`analysis.wallSegments`) against an optional original wall set. When no
+ * original is supplied (the common case today — Vista locks a single geometry),
+ * the sheet renders as "no structural changes". Wiring an original snapshot in
+ * later automatically populates demolish (red) / build (green) walls.
+ */
+function buildRedevelopmentPlan(
+  analysis: FloorPlanAnalysis,
+  originalWalls?: WallSegment[],
+): TechnicalPlanData {
+  const proposed = analysis.wallSegments ?? [];
+  if (!originalWalls || originalWalls.length === 0) {
+    return {
+      planType: "redevelopment",
+      title: DERIVED_PLAN_TITLES.redevelopment,
+      walls: proposed,
+      demolishedWalls: [],
+      builtWalls: [],
+      noStructuralChanges: true,
+    };
+  }
+  const d = diffWalls(originalWalls, proposed);
+  return {
+    planType: "redevelopment",
+    title: DERIVED_PLAN_TITLES.redevelopment,
+    walls: d.unchanged,
+    demolishedWalls: d.demolished,
+    builtWalls: d.built,
+    noStructuralChanges: d.noChanges,
+  };
+}
+
+function renderWallsColored(walls: WallSegment[], fy: FyFn, color: string, dash: boolean): string {
+  return walls
+    .map(
+      (w) =>
+        `<line x1="${w.x1}" y1="${fy(w.y1)}" x2="${w.x2}" y2="${fy(w.y2)}" stroke="${color}" stroke-width="${Math.max(w.thickness * 0.7, 40)}" stroke-linecap="butt" opacity="0.8"${dash ? ' stroke-dasharray="70,45"' : ""}/>`,
+    )
+    .join("\n");
+}
+
+function renderRedevelopmentOverlay(plan: TechnicalPlanData, bounds: Bounds, fy: FyFn): string {
+  const parts: string[] = [];
+  if (plan.demolishedWalls?.length) parts.push(renderWallsColored(plan.demolishedWalls, fy, "#dc2626", true));
+  if (plan.builtWalls?.length) parts.push(renderWallsColored(plan.builtWalls, fy, "#16a34a", false));
+  const lx = bounds.maxX;
+  const ly = fy(bounds.maxY) - 40;
+  parts.push(`<g font-size="72" text-anchor="end">
+    <line x1="${lx - 360}" y1="${ly - 22}" x2="${lx - 200}" y2="${ly - 22}" stroke="#dc2626" stroke-width="34" stroke-dasharray="70,45"/>
+    <text x="${lx}" y="${ly}" fill="#dc2626">Walls to demolish</text>
+    <line x1="${lx - 360}" y1="${ly + 108}" x2="${lx - 200}" y2="${ly + 108}" stroke="#16a34a" stroke-width="34"/>
+    <text x="${lx}" y="${ly + 130}" fill="#16a34a">Walls to build</text>
+  </g>`);
+  if (plan.noStructuralChanges) {
+    const cx = (bounds.minX + bounds.maxX) / 2;
+    parts.push(
+      `<text x="${cx}" y="${fy(bounds.minY) + 420}" text-anchor="middle" font-size="95" fill="#64748b">No structural changes</text>`,
+    );
+  }
+  return parts.join("\n");
+}
+
 /** Render a single technical plan to an SVG string. */
 export function renderPlanToSvg(plan: TechnicalPlanData, analysis: FloorPlanAnalysis | null = null): string {
   const bounds = computePlanBounds(plan, analysis);
@@ -1217,6 +1353,7 @@ export function renderPlanToSvg(plan: TechnicalPlanData, analysis: FloorPlanAnal
   if (plan.hvacUnits?.length) parts.push(renderHvacUnits(plan.hvacUnits, fy));
   if (plan.dimensions?.length) parts.push(renderDimensions(plan.dimensions, fy));
   if (plan.circuitGroups?.length) parts.push(renderCircuitLegend(plan.circuitGroups, bounds, fy));
+  if (plan.planType === "redevelopment") parts.push(renderRedevelopmentOverlay(plan, bounds, fy));
 
   parts.push("</svg>");
   return parts.join("\n");
@@ -1254,6 +1391,14 @@ export function renderAllPlans(
     if (key === "gas" && !hasGasInlet) continue;
     if (key === "ceiling" || key === "hvac") continue;
     out[key] = renderPlanToSvg(prepared[key], analysis);
+  }
+
+  // Derived sheets. Switches/sockets split the (authoritative, post-prepare)
+  // electrical fixtures; redevelopment diffs proposed vs original geometry.
+  if (analysis) {
+    out.redevelopment = renderPlanToSvg(buildRedevelopmentPlan(analysis), analysis);
+    out.switches = renderPlanToSvg(deriveSwitchesPlan(prepared.electrical), analysis);
+    out.sockets = renderPlanToSvg(deriveSocketsPlan(prepared.electrical), analysis);
   }
   return out;
 }

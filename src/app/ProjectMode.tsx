@@ -225,6 +225,13 @@ import {
   setEdgeLength,
   type Point,
 } from "@/lib/project/floorPlanGeometry";
+import {
+  canonicalizeAnalysisTopology,
+  graphFromAnalysis,
+  graphToAnalysis,
+  type FloorPlanGraph,
+} from "@/lib/project/floorPlanGraph";
+import { twoRoomFixtureAnalysis, FIXTURE_PLAN_IMAGE } from "@/lib/project/devFloorPlanFixture";
 import { cornerLabel } from "@/lib/roomShapePolygon";
 import { renderFloorPlanImage } from "@/lib/project/renderFloorPlanImage";
 import { defaultViewpointForRoom } from "@/lib/project/defaultViewpoint";
@@ -258,7 +265,37 @@ import {
 import { hasLocalProductCatalog } from "@/lib/catalogCountryCapabilities";
 import { FloorPlanFormatModal } from "@/components/FloorPlanFormatModal";
 import FloorPlanHub, { roomHubStatusLabel } from "@/components/project/FloorPlanHub";
+import { Apartment3DViewer } from "@/components/project/3d/Apartment3DViewer";
 import FloorPlanEditor from "@/components/project/FloorPlanEditor";
+import FloorPlanImageWithDetections from "@/components/project/FloorPlanImageWithDetections";
+import {
+  CUBICASA5K_SAMPLE_FIXTURE,
+  CUBICASA5K_SAMPLE_NORMALIZED,
+  fetchCubicasaSamplePlanFile,
+} from "@/lib/project/floorPlanDetections";
+import {
+  fetchRoboflowFloorPlanDetect,
+  type RoboflowDetectApiResponse,
+} from "@/lib/project/fetchRoboflowFloorPlanDetect";
+import {
+  analysisHasMultipleFloors,
+  floorLevelShortLabel,
+  roomFloorLevel,
+} from "@/lib/project/floorPlanFloors";
+import {
+  cropFloorPlanImageToInsetClient,
+  derivePanelInsetsFromAnalysis,
+  panelInsetForFloor,
+} from "@/lib/project/floorPlanPanelCropClient";
+import { applyCvOpeningsFromNormalized } from "@/lib/project/floorPlanCvPrior";
+import {
+  displayAreaToM2,
+  displayLengthToMetres,
+  formatEstimatedAreaLabel,
+  lengthUnitFromAreaUnit,
+  m2ToDisplayArea,
+  metresToDisplayLength,
+} from "@/lib/project/areaUnits";
 import { ProjectFinalizeCard } from "@/components/project/ProjectFinalizeCard";
 import RoomGenerationProgress from "@/components/project/RoomGenerationProgress";
 import RoomGenerationBanner, {
@@ -439,8 +476,50 @@ export default function ProjectModeContent(props: ProjectModeProps) {
     if (projectError) errorBannerRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [projectError]);
 
+  // DEV-ONLY: jump straight into the graph-mode review editor with a known 2-room
+  // shared-door plan, bypassing the (env-dependent) create/analyze pipeline.
+  const isDev = process.env.NODE_ENV === "development";
+  const loadFloorPlanFixture = useCallback(() => {
+    const analysis = twoRoomFixtureAnalysis();
+    // Clean slate first so the mount-time project resume (VistaHome) can't clobber us
+    // and no stale project id lingers.
+    resetProject();
+    setFloorPlan(FIXTURE_PLAN_IMAGE.base64, FIXTURE_PLAN_IMAGE.mimeType);
+    setProjectData({
+      id: `fixture-${Date.now()}`,
+      analysis,
+      concept: null,
+      rooms: [],
+      suggestedRoomOrder: [],
+      utilityEntryPoints: [],
+    });
+    const store = useConsumerDesignStore.getState();
+    store.setSelectedFloorPlanRoomId(analysis.rooms[0].id);
+    store.setDevAutoEditPlan(true); // land straight in the 2D editor (skip the "Edit plan" click)
+    setProjectStep("floorPlanReview");
+  }, [resetProject, setProjectData, setProjectStep, setFloorPlan]);
+
+  useEffect(() => {
+    if (!isDev || typeof window === "undefined") return;
+    const w = window as unknown as Record<string, unknown>;
+    w.__vistaLoadFloorPlanFixture = loadFloorPlanFixture;
+    return () => {
+      delete w.__vistaLoadFloorPlanFixture;
+    };
+  }, [isDev, loadFloorPlanFixture]);
+
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar">
+      {isDev && (
+        <button
+          type="button"
+          onClick={loadFloorPlanFixture}
+          title="DEV: load a 2-room shared-door plan straight into the graph-mode editor (skips analyze)"
+          className="fixed top-2 right-2 z-[100] px-2.5 py-1.5 rounded-md bg-fuchsia-600 text-white text-[11px] font-semibold shadow-lg hover:bg-fuchsia-500 cursor-pointer"
+        >
+          DEV: 2-room fixture
+        </button>
+      )}
       <div className={`${projectStep === "floorPlanReview" ? "max-w-3xl lg:max-w-6xl" : "max-w-3xl"} mx-auto w-full ${isMobile ? "p-4" : "p-6"} flex flex-col gap-6`}>
         <div className="cd-step-label">
           <span className="cd-step-label-line" />
@@ -656,9 +735,52 @@ function ProjectUploadStep({
   // Persisted in the store so it survives navigating forward and back (and page reloads).
   const draftRooms = useConsumerDesignStore((s) => s.projectDraftRooms);
   const setDraftRooms = useConsumerDesignStore((s) => s.setProjectDraftRooms);
-  const [showDraw, setShowDraw] = useState(draftRooms.length > 0);
+  const projectExpandDrawOnUpload = useConsumerDesignStore((s) => s.projectExpandDrawOnUpload);
+  const setProjectExpandDrawOnUpload = useConsumerDesignStore((s) => s.setProjectExpandDrawOnUpload);
+  const [showDraw, setShowDraw] = useState(false);
   const [draftSelectedRoomId, setDraftSelectedRoomId] = useState<string | null>(null);
   const [imageAspect, setImageAspect] = useState(4 / 3);
+  const [showDetections, setShowDetections] = useState(true);
+  const detectionOverlay = useConsumerDesignStore((s) => s.projectFloorPlanDetections);
+  const detectionLoading = useConsumerDesignStore((s) => s.projectFloorPlanDetectionLoading);
+  const detectionError = useConsumerDesignStore((s) => s.projectFloorPlanDetectionError);
+  const detectionImageMeta = useConsumerDesignStore((s) => s.projectFloorPlanDetectionImage);
+  const setProjectFloorPlanDetections = useConsumerDesignStore((s) => s.setProjectFloorPlanDetections);
+  const setProjectFloorPlanPanelInsets = useConsumerDesignStore((s) => s.setProjectFloorPlanPanelInsets);
+  const setProjectFloorPlanDetectionLoading = useConsumerDesignStore(
+    (s) => s.setProjectFloorPlanDetectionLoading,
+  );
+  const setProjectFloorPlanDetectionError = useConsumerDesignStore(
+    (s) => s.setProjectFloorPlanDetectionError,
+  );
+  useEffect(() => {
+    if (projectExpandDrawOnUpload) {
+      setShowDraw(true);
+      setProjectExpandDrawOnUpload(false);
+    }
+  }, [projectExpandDrawOnUpload, setProjectExpandDrawOnUpload]);
+  // Total-area unit toggle. `preferences.totalArea` is ALWAYS stored in m²; when
+  // the user picks ft² we convert on input so US plans (labeled in sq ft) scale
+  // correctly. `areaInput` holds the raw number shown in the chosen unit.
+  const areaUnit = preferences.totalAreaUnit ?? "m2";
+  const [areaInput, setAreaInput] = useState<string>(() =>
+    m2ToDisplayArea(preferences.totalArea, areaUnit),
+  );
+  const handleAreaInput = (raw: string) => {
+    setAreaInput(raw);
+    const n = raw ? Number(raw) : undefined;
+    const m2 =
+      n != null && Number.isFinite(n) ? displayAreaToM2(n, areaUnit) : undefined;
+    setPreferences({ totalArea: m2 });
+  };
+  const handleAreaUnit = (unit: "m2" | "ft2") => {
+    if (unit === areaUnit) return;
+    setPreferences({ totalAreaUnit: unit });
+    const m2 = preferences.totalArea ?? 0;
+    if (m2 > 0) {
+      setAreaInput(m2ToDisplayArea(m2, unit));
+    }
+  };
   // Problems that must be fixed before leaving the planning page for "Analyzing".
   const [planIssues, setPlanIssues] = useState<string[]>([]);
   const draftAnalysis: FloorPlanAnalysis = {
@@ -683,7 +805,15 @@ function ProjectUploadStep({
   const drawnRoomCount = drawnRooms.length;
   const canContinue = Boolean(floorPlanBase64);
 
-  const handleAnalyze = useCallback(async () => {
+  // Synchronous re-entrancy guard: `projectLoading` (used to disable the button) is
+  // only set true partway through the handler below, after validation — a fast
+  // double-click can fire this handler twice before React re-renders the disabled
+  // state, firing two full (paid) floor-plan analyses. This ref is checked/set
+  // before any `await`, so it closes that window regardless of render timing.
+  const analyzeInFlightRef = useRef(false);
+  const clientRoboflowDetectRef = useRef<RoboflowDetectApiResponse | null>(null);
+
+  const runAnalyze = useCallback(async () => {
     if (!floorPlanBase64 || !floorPlanMimeType) return;
     if (!isFloorPlanImageMime(floorPlanMimeType)) {
       setFloorPlanFormatModalOpen(true);
@@ -768,6 +898,18 @@ function ProjectUploadStep({
         form.set("manualAnalysis", JSON.stringify(manualAnalysis));
       }
 
+      const clientRf = clientRoboflowDetectRef.current;
+      if (clientRf?.predictions?.length && clientRf.image?.width) {
+        form.set(
+          "roboflowDetections",
+          JSON.stringify({
+            image: clientRf.image,
+            predictions: clientRf.predictions,
+            ...(clientRf.panels ? { panels: clientRf.panels } : {}),
+          }),
+        );
+      }
+
       const completeEvent = await streamCreateProject(form, (event) => {
         setProjectAnalysisProgress(event.progress ?? 0, event.message);
         console.log("[vista][floor-plan] event", event.phase, event);
@@ -837,6 +979,16 @@ function ProjectUploadStep({
     t,
   ]);
 
+  const handleAnalyze = useCallback(async () => {
+    if (analyzeInFlightRef.current) return;
+    analyzeInFlightRef.current = true;
+    try {
+      await runAnalyze();
+    } finally {
+      analyzeInFlightRef.current = false;
+    }
+  }, [runAnalyze]);
+
   const handleFloorPlanFile = useCallback(
     async (file: File) => {
       if (!file.type.startsWith("image/")) {
@@ -862,13 +1014,47 @@ function ProjectUploadStep({
         // which makes opening detection miss them.
         const { base64, mimeType } = await compressImageFile(file, { maxEdge: 2200, quality: 0.92 });
         setFloorPlan(base64, mimeType);
-        // Manual trace is optional — AI auto-detect runs on the raw upload by default.
-        if (draftRooms.length === 0) setShowDraw(false);
+        setProjectFloorPlanDetections([], null);
+        setProjectFloorPlanPanelInsets([]);
+        setProjectFloorPlanDetectionError(null);
+        setProjectFloorPlanDetectionLoading(true);
+        clientRoboflowDetectRef.current = null;
+        // New upload = verification overlay only; drop any persisted manual trace.
+        setDraftRooms([]);
+        setShowDraw(false);
+        setProjectExpandDrawOnUpload(false);
+        try {
+          const detectResult = await fetchRoboflowFloorPlanDetect(file);
+          clientRoboflowDetectRef.current = detectResult;
+          setProjectFloorPlanDetections(detectResult.normalized, detectResult.image);
+          if (detectResult.panels?.length) {
+            setProjectFloorPlanPanelInsets(
+              detectResult.panels.map((p) => ({
+                floorLevel: p.floorLevel,
+                left: p.inset.left,
+                top: p.inset.top,
+                width: p.inset.width,
+                height: p.inset.height,
+              })),
+            );
+          } else {
+            setProjectFloorPlanPanelInsets([]);
+          }
+          setShowDetections(true);
+        } catch (detectErr) {
+          const msg = detectErr instanceof Error ? detectErr.message : "Detection failed";
+          pipelineLog("UPLOAD", "roboflow detect skipped or failed", { error: msg }, "warn");
+          setProjectFloorPlanDetections([], null);
+          setProjectFloorPlanDetectionError(msg);
+          clientRoboflowDetectRef.current = null;
+        } finally {
+          setProjectFloorPlanDetectionLoading(false);
+        }
       } catch {
         setProjectError(t("project.floorPlanReadError"));
       }
     },
-    [draftRooms.length, setFloorPlan, setProjectError, t],
+    [setDraftRooms, setFloorPlan, setProjectError, setProjectExpandDrawOnUpload, setProjectFloorPlanDetections, setProjectFloorPlanPanelInsets, setProjectFloorPlanDetectionError, setProjectFloorPlanDetectionLoading, t],
   );
 
   const handleRoomPhotoFiles = useCallback((files: FileList | File[]) => {
@@ -897,6 +1083,31 @@ function ProjectUploadStep({
     [cameraTarget, handleFloorPlanFile, handleRoomPhotoFiles]
   );
 
+  const loadSampleFloorPlanFixture = useCallback(async () => {
+    try {
+      const file = await fetchCubicasaSamplePlanFile();
+      const { base64, mimeType } = await compressImageFile(file, { maxEdge: 2200, quality: 0.92 });
+      setFloorPlan(base64, mimeType);
+      setDraftRooms([]);
+      setShowDraw(false);
+      setProjectFloorPlanDetectionError(null);
+      setProjectFloorPlanDetections(
+        CUBICASA5K_SAMPLE_NORMALIZED,
+        CUBICASA5K_SAMPLE_FIXTURE.image,
+      );
+      setShowDetections(true);
+    } catch {
+      setProjectError(t("project.floorPlanReadError"));
+    }
+  }, [
+    setDraftRooms,
+    setFloorPlan,
+    setProjectError,
+    setProjectFloorPlanDetections,
+    setProjectFloorPlanDetectionError,
+    t,
+  ]);
+
   const floorPlanPreview = floorPlanBase64 && floorPlanMimeType
     ? `data:${floorPlanMimeType};base64,${floorPlanBase64}`
     : null;
@@ -912,6 +1123,15 @@ function ProjectUploadStep({
         <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-2 block">
           {t("project.floorPlanRequired")} <span className="text-red-400">*</span>
         </label>
+        {process.env.NODE_ENV === "development" && (
+          <button
+            type="button"
+            onClick={() => void loadSampleFloorPlanFixture()}
+            className="mb-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--muted)] text-xs font-medium hover:border-[var(--primary)]/40 cursor-pointer"
+          >
+            Load sample plan (914×1720 fixture + 31 boxes)
+          </button>
+        )}
         {!floorPlanPreview ? (
           <div
             className={`w-full ${isMobile ? "min-h-[9rem]" : "min-h-[11rem] sm:min-h-[13rem]"} rounded-2xl border-2 border-dashed ${isMobile ? "py-4 px-4" : "py-6 px-5"} flex flex-col justify-center sm:flex-row sm:items-center gap-4 sm:gap-8 cursor-pointer transition-all ${
@@ -969,24 +1189,55 @@ function ProjectUploadStep({
             />
           </div>
         ) : (
-          <div className="relative rounded-2xl overflow-hidden border border-[var(--border)]">
-            <img
-              src={floorPlanPreview}
-              alt={t("project.floorPlanAlt")}
-              className="w-full object-contain max-h-[300px]"
-              onLoad={(e) => {
-                const img = e.currentTarget;
-                if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-                  setImageAspect(img.naturalWidth / img.naturalHeight);
-                }
-              }}
-            />
+          <div className="relative rounded-2xl overflow-hidden border border-[var(--border)] bg-[var(--muted)]/30">
+            <div className="relative mx-auto w-fit max-w-full p-1">
+              <FloorPlanImageWithDetections
+                imageSrc={floorPlanPreview}
+                imageAlt={t("project.floorPlanAlt")}
+                detections={detectionOverlay}
+                showOverlay={showDetections}
+                isLoading={detectionLoading}
+                errorMessage={detectionError}
+                className={showDetections ? "max-h-[min(70vh,900px)]" : "max-h-[300px]"}
+                onImageAspect={setImageAspect}
+              />
+            </div>
             <button
+              type="button"
               onClick={() => setFloorPlan(null, null)}
-              className="absolute top-3 right-3 p-2 rounded-full bg-black/60 text-white hover:bg-black/80 transition-colors cursor-pointer"
+              className="absolute top-3 right-3 z-10 p-2 rounded-full bg-black/60 text-white hover:bg-black/80 transition-colors cursor-pointer"
             >
               <X size={16} />
             </button>
+            <div className="absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDetections((v) => !v)}
+                className="px-3 py-1.5 rounded-lg bg-black/65 text-white text-xs font-medium hover:bg-black/80 transition-colors cursor-pointer"
+              >
+                {showDetections ? "Hide detections" : "Show detections"}
+              </button>
+              {showDetections && (
+                <span className="px-2 py-1 rounded-lg bg-black/55 text-white/90 text-[10px] leading-tight">
+                  {detectionLoading
+                    ? "Running Roboflow…"
+                    : detectionError
+                      ? "Roboflow failed"
+                      : detectionOverlay.length > 0
+                        ? `Roboflow · ${detectionOverlay.length} boxes${
+                            detectionImageMeta
+                              ? ` · ${detectionImageMeta.width}×${detectionImageMeta.height}`
+                              : ""
+                          }`
+                        : "No Roboflow overlay (configure ROBOFLOW_API_KEY or retry)"}
+                </span>
+              )}
+              {detectionError && showDetections && (
+                <span className="px-2 py-1 rounded-lg bg-red-900/70 text-white/95 text-[10px] max-w-[14rem] leading-tight">
+                  {detectionError}
+                </span>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -1012,6 +1263,7 @@ function ProjectUploadStep({
                 onRoomsChange={setDraftRooms}
                 roomTypeLabel={projectRoomTypeLabel}
                 canvasExtentMm={canvasExtentMm}
+                lengthUnit={lengthUnitFromAreaUnit(areaUnit)}
               />
             </>
           )}
@@ -1199,13 +1451,30 @@ function ProjectUploadStep({
         <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-2 block">
           {t("project.totalAreaOptional")}
         </label>
-        <input
-          type="number"
-          value={preferences.totalArea ?? ""}
-          onChange={(e) => setPreferences({ totalArea: e.target.value ? Number(e.target.value) : undefined })}
-          placeholder={t("project.totalAreaPlaceholder")}
-          className="w-full px-4 py-2.5 rounded-xl bg-[var(--muted)] border border-[var(--border)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/50"
-        />
+        <div className="flex gap-2">
+          <input
+            type="number"
+            value={areaInput}
+            onChange={(e) => handleAreaInput(e.target.value)}
+            placeholder={areaUnit === "ft2" ? "e.g. 700" : t("project.totalAreaPlaceholder")}
+            className="flex-1 px-4 py-2.5 rounded-xl bg-[var(--muted)] border border-[var(--border)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/50"
+          />
+          <div className="flex rounded-xl overflow-hidden border border-[var(--border)]">
+            {(["m2", "ft2"] as const).map((u) => (
+              <button
+                key={u}
+                type="button"
+                onClick={() => handleAreaUnit(u)}
+                className={`px-3 text-xs font-semibold transition-colors ${
+                  areaUnit === u ? "bg-[var(--primary)] text-white" : "bg-[var(--muted)] text-[var(--muted-foreground)]"
+                }`}
+              >
+                {u === "m2" ? "m²" : "ft²"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="text-[11px] text-[var(--muted-foreground)] mt-1.5">{t("project.totalAreaHint")}</p>
       </div>
 
       {planIssues.length > 0 && (
@@ -1740,7 +2009,9 @@ function ProjectInspirationProducts({
 
 type AnalyzingPhase = "floorPlan" | "concept";
 
-const ANALYZING_STALL_HINT_MS = 4 * 60 * 1000;
+// The progress bar parks at ~90% during the single, silent vision call, so show
+// the reassurance hint quickly (rather than after minutes) if it runs long.
+const ANALYZING_STALL_HINT_MS = 45 * 1000;
 
 function ProjectAnalyzingStep({
   phase,
@@ -1760,12 +2031,33 @@ function ProjectAnalyzingStep({
   const projectAnalysis = useConsumerDesignStore((s) => s.projectAnalysis);
   const setProjectAnalysis = useConsumerDesignStore((s) => s.setProjectAnalysis);
   const [showStallHint, setShowStallHint] = useState(false);
+  // The floor-plan analysis is a single, atomic vision request — the server can't
+  // emit real progress mid-call, so the bar would otherwise sit frozen at ~40%.
+  // Ease a local "creep" value up toward 0.9 so it visibly advances; the real
+  // completion event (1.0) snaps it to done. No extra requests.
+  const [creep, setCreep] = useState(0);
 
   useEffect(() => {
     setShowStallHint(false);
     const timer = setTimeout(() => setShowStallHint(true), ANALYZING_STALL_HINT_MS);
     return () => clearTimeout(timer);
   }, [phase, projectId]);
+
+  useEffect(() => {
+    if (phase !== "floorPlan") {
+      setCreep(0);
+      return;
+    }
+    setCreep(0);
+    const id = setInterval(() => {
+      setCreep((c) => (c < 0.9 ? c + (0.9 - c) * 0.06 : c));
+    }, 800);
+    return () => clearInterval(id);
+  }, [phase, projectId]);
+
+  const rawProgress = progress ?? 0;
+  const shownProgress =
+    rawProgress >= 0.999 ? 1 : Math.max(rawProgress, phase === "floorPlan" ? creep : 0);
 
   // Re-hydrate analysis after hot reload so titles and downstream steps stay accurate.
   useEffect(() => {
@@ -1840,10 +2132,10 @@ function ProjectAnalyzingStep({
       <div className="w-full h-2.5 rounded-full bg-[var(--muted)] overflow-hidden border border-[var(--border)]">
         <div
           className="h-full bg-[var(--primary)] transition-all duration-500 ease-out"
-          style={{ width: `${Math.round(Math.min(100, Math.max(0, progress * 100)))}%` }}
+          style={{ width: `${Math.round(Math.min(100, Math.max(0, shownProgress * 100)))}%` }}
         />
       </div>
-      <p className="text-xs text-[var(--muted-foreground)]">{Math.round(progress * 100)}%</p>
+      <p className="text-xs text-[var(--muted-foreground)]">{Math.round(shownProgress * 100)}%</p>
       {showStallHint && (
         <p className="text-xs text-[var(--muted-foreground)] text-center max-w-sm">
           {t("project.analyzingStallHint")}
@@ -2008,6 +2300,31 @@ function ProjectFloorPlanReviewStep({
   const utilityPoints = useConsumerDesignStore((s) => s.projectUtilityEntryPoints);
   const setProjectUtilityEntryPoints = useConsumerDesignStore((s) => s.setProjectUtilityEntryPoints);
   const setProjectAnalysis = useConsumerDesignStore((s) => s.setProjectAnalysis);
+  const projectGraph = useConsumerDesignStore((s) => s.projectGraph);
+  const setProjectGraph = useConsumerDesignStore((s) => s.setProjectGraph);
+  const devAutoEditPlan = useConsumerDesignStore((s) => s.devAutoEditPlan);
+  const totalAreaUnit = useConsumerDesignStore((s) => s.projectPreferences.totalAreaUnit ?? "m2");
+  const lengthUnit = lengthUnitFromAreaUnit(totalAreaUnit);
+  const setProjectExpandDrawOnUpload = useConsumerDesignStore((s) => s.setProjectExpandDrawOnUpload);
+  const geometryMisaligned = Boolean(analysis?.geometryQuality?.problematic);
+  const cvOpeningMisaligned = Boolean(analysis?.cvReview?.problematic);
+  const showHybridPlanWarning = geometryMisaligned || cvOpeningMisaligned;
+  const handleAcceptCvOpenings = useCallback(() => {
+    if (!analysis?.cvDetectionsNormalized?.length || !analysis.imageFrame) return;
+    const updated = applyCvOpeningsFromNormalized(
+      analysis,
+      analysis.cvDetectionsNormalized,
+      analysis.imageFrame,
+    );
+    setProjectAnalysis({
+      ...updated,
+      cvReview: analysis.cvReview
+        ? { ...analysis.cvReview, problematic: false, unmatchedOpeningCount: 0 }
+        : undefined,
+    });
+  }, [analysis, setProjectAnalysis]);
+
+  const setDevAutoEditPlan = useConsumerDesignStore((s) => s.setDevAutoEditPlan);
   const setPhotoViewpoint = useConsumerDesignStore((s) => s.setPhotoViewpoint);
   // Raw text drafts for the numeric dimension fields, keyed e.g. `${roomId}:w2`
   // (wall edge 2) or `${roomId}:height`. Lets the user type freely (decimals,
@@ -2020,6 +2337,12 @@ function ProjectFloorPlanReviewStep({
   const [confirmedRoomIds, setConfirmedRoomIds] = useState<Set<string>>(new Set());
   const [viewpointPhotoId, setViewpointPhotoId] = useState<string | null>(null);
   const [structuralEditPhotoId, setStructuralEditPhotoId] = useState<string | null>(null);
+  const multiFloor = Boolean(analysis && analysisHasMultipleFloors(analysis.rooms));
+  const [activeReviewFloor, setActiveReviewFloor] = useState<1 | 2>(1);
+  const [showScanUnderlay, setShowScanUnderlay] = useState(false);
+  const [editorPlanImageSrc, setEditorPlanImageSrc] = useState("");
+  const panelInsets = useConsumerDesignStore((s) => s.projectFloorPlanPanelInsets);
+  const setProjectFloorPlanPanelInsets = useConsumerDesignStore((s) => s.setProjectFloorPlanPanelInsets);
   const utilitiesSeededRef = useRef(false);
 
   // Switching rooms cancels any in-progress placement so the new room starts
@@ -2029,9 +2352,19 @@ function ProjectFloorPlanReviewStep({
       setSelectedFloorPlanRoomId(roomId);
       setViewpointPhotoId(null);
       setActivePlacementType(null);
+      const room = analysis?.rooms.find((r) => r.id === roomId);
+      if (room && multiFloor) {
+        setActiveReviewFloor(roomFloorLevel(room));
+      }
     },
-    [setSelectedFloorPlanRoomId],
+    [setSelectedFloorPlanRoomId, analysis, multiFloor],
   );
+
+  useEffect(() => {
+    if (!analysis || !multiFloor || panelInsets.length >= 2) return;
+    const derived = derivePanelInsetsFromAnalysis(analysis);
+    if (derived) setProjectFloorPlanPanelInsets(derived);
+  }, [analysis, multiFloor, panelInsets.length, setProjectFloorPlanPanelInsets]);
 
   useEffect(() => {
     if (!analysis || utilitiesSeededRef.current) return;
@@ -2093,6 +2426,37 @@ function ProjectFloorPlanReviewStep({
     floorPlanBase64 && floorPlanMimeType
       ? `data:${floorPlanMimeType};base64,${floorPlanBase64}`
       : "";
+
+  useEffect(() => {
+    if (!floorPlanSrc) {
+      setEditorPlanImageSrc("");
+      return;
+    }
+    if (!showScanUnderlay) {
+      setEditorPlanImageSrc(floorPlanSrc);
+      return;
+    }
+    if (!multiFloor) {
+      setEditorPlanImageSrc(floorPlanSrc);
+      return;
+    }
+    const inset = panelInsetForFloor(panelInsets, activeReviewFloor);
+    if (!inset) {
+      setEditorPlanImageSrc(floorPlanSrc);
+      return;
+    }
+    let cancelled = false;
+    void cropFloorPlanImageToInsetClient(floorPlanSrc, inset)
+      .then((url) => {
+        if (!cancelled) setEditorPlanImageSrc(url);
+      })
+      .catch(() => {
+        if (!cancelled) setEditorPlanImageSrc(floorPlanSrc);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [floorPlanSrc, showScanUnderlay, multiFloor, panelInsets, activeReviewFloor]);
 
   const selectedRoom = analysis?.rooms.find((r) => r.id === selectedRoomId) ?? null;
   const matchedPhotos = selectedRoomId
@@ -2161,6 +2525,43 @@ function ProjectFloorPlanReviewStep({
       applyEditedRooms(rooms);
     },
     [applyEditedRooms],
+  );
+
+  // Graph-mode editing: the normalized graph is the edit source of truth so shared
+  // corners/walls/doors are single objects (dragging them moves BOTH rooms; a shared
+  // door is edited once). Derive it lazily from the analysis on first entry (also
+  // dedupes doubled interior doors immediately); the store resets it to null whenever a
+  // fresh analysis loads so it re-derives. Guarded: if the rebuild would distort any
+  // room's area (>5%) we skip graph mode for this plan and keep legacy polygon editing.
+  const graphInitRef = useRef<FloorPlanAnalysis | null>(null);
+  useEffect(() => {
+    if (!analysis || analysis.rooms.length === 0 || projectGraph) return;
+    if (graphInitRef.current === analysis) return; // already attempted for this analysis
+    graphInitRef.current = analysis;
+    const g = graphFromAnalysis(analysis);
+    const rebuilt = graphToAnalysis(g, analysis);
+    const safe =
+      rebuilt.rooms.length === analysis.rooms.length &&
+      analysis.rooms.every((r) => {
+        const poly = sanitizePolygon(r.polygon);
+        if (poly.length < 3) return true;
+        const after = rebuilt.rooms.find((x) => x.id === r.id);
+        if (!after) return false;
+        const a0 = polygonArea(poly);
+        return a0 <= 0 || Math.abs(polygonArea(sanitizePolygon(after.polygon)) - a0) / a0 <= 0.05;
+      });
+    if (safe) {
+      setProjectGraph(g);
+      setProjectAnalysis(rebuilt);
+    }
+  }, [analysis, projectGraph, setProjectGraph, setProjectAnalysis]);
+
+  const handleGraphChange = useCallback(
+    (graph: FloorPlanGraph) => {
+      setProjectGraph(graph);
+      if (analysis) setProjectAnalysis(graphToAnalysis(graph, analysis));
+    },
+    [analysis, setProjectGraph, setProjectAnalysis],
   );
 
   const handlePlaceViewpoint = useCallback(
@@ -2268,12 +2669,12 @@ function ProjectFloorPlanReviewStep({
 
   // Draft-aware field helpers so typing decimals / clearing the field is smooth
   // even though the committed value is derived from the polygon in the store.
-  const fieldValue = (key: string, derived: number) =>
-    dimDraft[key] ?? String(Math.round(derived * 100) / 100);
+  const fieldValue = (key: string, derivedM: number) =>
+    dimDraft[key] ?? String(metresToDisplayLength(derivedM, lengthUnit));
   const handleFieldInput = (key: string, raw: string, commit: (n: number) => void) => {
     setDimDraft((d) => ({ ...d, [key]: raw }));
     const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) commit(n);
+    if (Number.isFinite(n) && n > 0) commit(displayLengthToMetres(n, lengthUnit));
   };
   const handleFieldBlur = (key: string) =>
     setDimDraft((d) => {
@@ -2334,14 +2735,18 @@ function ProjectFloorPlanReviewStep({
 
       // Persist corrected geometry: rooms + walls re-derived from polygon edges
       // (shared edges deduped) so the SVG and technical-drawing PDF stay consistent.
-      const editedAnalysis: FloorPlanAnalysis = {
+      // Then canonicalize topology through the normalized graph: unify shared walls,
+      // dedupe interior doors, and re-emit each shared door onto both adjacent rooms
+      // so the 3D viewer never loses a door on a suppressed shared wall. Guarded —
+      // it falls back to the raw geometry if the rebuild would distort any room.
+      const editedAnalysis: FloorPlanAnalysis = canonicalizeAnalysisTopology({
         ...analysis,
         rooms: editedRooms,
         wallSegments: deriveWallSegments(
           editedRooms.map((r) => r.polygon ?? []).filter((p) => p.length >= 3),
         ),
         sharedWalls: computeSharedWalls(editedRooms),
-      };
+      });
 
       const viewpoints = roomPhotos
         .filter((p) => p.viewpoint)
@@ -2412,9 +2817,21 @@ function ProjectFloorPlanReviewStep({
     setConfirmedRoomIds(new Set());
     const first = analysis.rooms[0];
     setActiveRoomId(first?.id ?? null);
-    if (first) setSelectedFloorPlanRoomId(first.id);
+    if (first) {
+      setSelectedFloorPlanRoomId(first.id);
+      if (multiFloor) setActiveReviewFloor(roomFloorLevel(first));
+    }
     setEditMode(true);
-  }, [analysis, setSelectedFloorPlanRoomId]);
+  }, [analysis, setSelectedFloorPlanRoomId, multiFloor]);
+
+  // DEV-only: the fixture loader lands us straight in the 2D graph editor.
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    if (devAutoEditPlan && analysis && !editMode) {
+      startRoomReview();
+      setDevAutoEditPlan(false);
+    }
+  }, [devAutoEditPlan, analysis, editMode, startRoomReview, setDevAutoEditPlan]);
 
   const goToRoomById = useCallback(
     (roomId: string) => {
@@ -2422,8 +2839,10 @@ function ProjectFloorPlanReviewStep({
       if (!rooms?.some((r) => r.id === roomId)) return;
       setActiveRoomId(roomId);
       setSelectedFloorPlanRoomId(roomId);
+      const room = rooms.find((r) => r.id === roomId);
+      if (room && multiFloor) setActiveReviewFloor(roomFloorLevel(room));
     },
-    [analysis, setSelectedFloorPlanRoomId],
+    [analysis, setSelectedFloorPlanRoomId, multiFloor],
   );
 
   const goToRoom = useCallback(
@@ -2543,12 +2962,46 @@ function ProjectFloorPlanReviewStep({
             <DoorOpen size={13} /> {t("project.doorCount", { count: doorCount })}
           </span>
           <span className="text-[var(--muted-foreground)]">· {t("project.confirmRoomHint")}</span>
+          {showHybridPlanWarning && (
+            <span className="text-amber-600 text-[11px] w-full text-center mt-1">
+              {t("project.floorPlanDoorEditHint")}
+            </span>
+          )}
         </div>
 
+        {multiFloor && (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {([1, 2] as const).map((level) => (
+              <button
+                key={level}
+                type="button"
+                onClick={() => setActiveReviewFloor(level)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border cursor-pointer transition-colors ${
+                  activeReviewFloor === level
+                    ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                    : "border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]/40"
+                }`}
+              >
+                {floorLevelShortLabel(level)}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <label className="flex items-center justify-center gap-2 text-xs text-[var(--muted-foreground)] cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showScanUnderlay}
+            onChange={(e) => setShowScanUnderlay(e.target.checked)}
+            className="accent-[var(--primary)]"
+          />
+          {t("project.showScanUnderlay")}
+        </label>
+
         <FloorPlanEditor
-          key={activeRoomId}
+          key={`${activeRoomId}-${activeReviewFloor}-${showScanUnderlay ? "scan" : "vector"}`}
           analysis={analysis}
-          floorPlanImageSrc={floorPlanSrc}
+          floorPlanImageSrc={showScanUnderlay ? editorPlanImageSrc || floorPlanSrc : floorPlanSrc}
           selectedRoomId={selectedRoomId}
           onRoomSelect={handleGuidedRoomSelect}
           onRoomsChange={handleRoomsChange}
@@ -2556,6 +3009,12 @@ function ProjectFloorPlanReviewStep({
           roomTypeLabel={projectRoomTypeLabel}
           focusRoomId={activeRoomId}
           isMobile={isMobile}
+          graph={projectGraph}
+          onGraphChange={handleGraphChange}
+          lengthUnit={lengthUnit}
+          showPlanImage={showScanUnderlay}
+          floorLevel={multiFloor ? activeReviewFloor : undefined}
+          variant="reviewHero"
         />
 
         {/* Sticky action bar: Back / Confirm room. */}
@@ -2584,37 +3043,134 @@ function ProjectFloorPlanReviewStep({
 
   return (
     <div className="flex flex-col gap-6">
+      {showHybridPlanWarning && (
+        <div className="px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/40 text-sm text-amber-900 dark:text-amber-100 flex flex-col gap-3">
+          <p className="font-semibold">{t("project.floorPlanAlignWarningTitle")}</p>
+          <p className="text-[13px] leading-relaxed opacity-90">{t("project.floorPlanAlignWarningBody")}</p>
+          {cvOpeningMisaligned && analysis?.cvReview && (
+            <p className="text-[12px] leading-relaxed opacity-90">
+              Roboflow detected {analysis.cvReview.cvDoorCount} doors and{" "}
+              {analysis.cvReview.cvWindowCount} windows; the AI read{" "}
+              {analysis.cvReview.gptDoorCount} doors and {analysis.cvReview.gptWindowCount} windows
+              ({analysis.cvReview.unmatchedOpeningCount} openings may be misaligned).
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {cvOpeningMisaligned &&
+              (analysis?.cvDetectionsNormalized?.length ?? 0) > 0 &&
+              analysis?.imageFrame && (
+                <button
+                  type="button"
+                  onClick={handleAcceptCvOpenings}
+                  className="px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-semibold hover:brightness-110 cursor-pointer"
+                >
+                  Accept CV openings
+                </button>
+              )}
+            <button
+              type="button"
+              onClick={() => {
+                setProjectExpandDrawOnUpload(true);
+                setProjectStep("upload");
+              }}
+              className="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:brightness-110 cursor-pointer"
+            >
+              {t("project.floorPlanAlignWarningCta")}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="flex flex-col items-center gap-1.5">
         <h2 className="cd-step-title">{t("project.matchingTitle")}</h2>
         <p className="cd-step-subtitle">{t("project.matchingDetectedRooms", { count: analysis.rooms.length })}</p>
+        <p className="cd-step-subtitle text-[var(--muted-foreground)]">{t("project.reviewAccuracyHint")}</p>
         <button
           type="button"
           onClick={startRoomReview}
-          className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--muted)] text-sm font-medium hover:bg-[var(--muted)]/80 cursor-pointer"
+          className="mt-2 inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[var(--primary)] text-white text-sm font-semibold hover:brightness-110 transition-all cursor-pointer"
         >
           <Pencil size={15} /> {t("project.editPlanCta")}
         </button>
       </div>
 
-      <div className={`grid gap-6 ${isMobile ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-2"}`}>
-        <FloorPlanHub
-          analysis={analysis}
-          floorPlanImageSrc={floorPlanSrc}
-          rooms={[]}
-          selectedRoomId={selectedRoomId}
-          suggestedNextRoomId={null}
-          onRoomSelect={handleRoomSelect}
-          mode="review"
-          utilityPoints={utilityPoints}
-          activePlacementType={activePlacementType}
-          onPlaceUtility={handlePlaceUtility}
-          onRemoveUtility={handleRemoveUtility}
-          viewpointMarkers={viewpointMarkers}
-          activeViewpointPhotoId={viewpointPhotoId}
-          onPlaceViewpoint={handlePlaceViewpoint}
-          onMoveColumn={handleMoveColumn}
-          onRemoveColumn={handleRemoveColumn}
-        />
+      {floorPlanSrc && (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            {t("project.originalFloorPlanScan")}
+          </p>
+          <button
+            type="button"
+            onClick={() => setLightboxSrc(floorPlanSrc)}
+            className="self-start rounded-xl border border-[var(--border)] overflow-hidden bg-[var(--muted)]/40 hover:border-[var(--primary)]/40 cursor-pointer transition-colors"
+          >
+            <img
+              src={floorPlanSrc}
+              alt={t("project.floorPlanAlt")}
+              className="max-h-24 max-w-xs w-auto object-contain block"
+            />
+          </button>
+        </div>
+      )}
+
+      <div className={`grid gap-6 ${isMobile ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-3"}`}>
+        <div className={`flex flex-col gap-3 ${isMobile ? "" : "lg:col-span-2"}`}>
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              {t("project.analyzedPlanTitle")}
+            </p>
+            {multiFloor && (
+              <div className="flex flex-wrap gap-2">
+                {([1, 2] as const).map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    onClick={() => setActiveReviewFloor(level)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold border cursor-pointer transition-colors ${
+                      activeReviewFloor === level
+                        ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                        : "border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]/40"
+                    }`}
+                  >
+                    {floorLevelShortLabel(level)}
+                  </button>
+                ))}
+              </div>
+            )}
+            <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)] cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showScanUnderlay}
+                onChange={(e) => setShowScanUnderlay(e.target.checked)}
+                className="accent-[var(--primary)]"
+              />
+              {t("project.showScanUnderlay")}
+            </label>
+          </div>
+          <FloorPlanEditor
+            key={`review-${activeReviewFloor}-${showScanUnderlay ? "scan" : "vector"}`}
+            analysis={analysis}
+            floorPlanImageSrc={showScanUnderlay ? editorPlanImageSrc || floorPlanSrc : floorPlanSrc}
+            selectedRoomId={selectedRoomId}
+            onRoomSelect={(roomId) => {
+              if (roomId) handleRoomSelect(roomId);
+            }}
+            onRoomsChange={handleRoomsChange}
+            onColumnsChange={handleColumnsChange}
+            roomTypeLabel={projectRoomTypeLabel}
+            isMobile={isMobile}
+            graph={projectGraph}
+            onGraphChange={handleGraphChange}
+            lengthUnit={lengthUnit}
+            showPlanImage={showScanUnderlay}
+            floorLevel={multiFloor ? activeReviewFloor : undefined}
+            variant="reviewHero"
+            utilityPoints={utilityPoints}
+            activePlacementType={activePlacementType}
+            onPlaceUtility={handlePlaceUtility}
+            activeViewpointPhotoId={viewpointPhotoId}
+            onPlaceViewpoint={handlePlaceViewpoint}
+          />
+        </div>
 
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-4 p-4 rounded-xl border border-[var(--border)] bg-[var(--card)] min-h-[200px]">
@@ -2627,7 +3183,11 @@ function ProjectFloorPlanReviewStep({
               <div>
                 <h3 className="text-lg font-bold">{selectedRoom.name}</h3>
                 <p className="text-xs text-[var(--muted-foreground)]">
-                  {projectRoomTypeLabel(selectedRoom.type)} · ~{selectedRoom.estimatedArea}m²
+                  {projectRoomTypeLabel(selectedRoom.type)} ·{" "}
+                  {formatEstimatedAreaLabel(selectedRoom.estimatedArea, totalAreaUnit)}
+                  {analysisHasMultipleFloors(analysis.rooms)
+                    ? ` · ${floorLevelShortLabel(roomFloorLevel(selectedRoom))}`
+                    : ""}
                 </p>
               </div>
 
@@ -2645,7 +3205,7 @@ function ProjectFloorPlanReviewStep({
                     <div className="flex flex-col gap-2">
                       <div>
                         <label className="text-[10px] uppercase text-[var(--muted-foreground)]">
-                          {t("project.dimHeight")}
+                          {lengthUnit === "ft" ? t("project.dimHeightFt") : t("project.dimHeight")}
                         </label>
                         <input
                           type="number"
@@ -2662,7 +3222,7 @@ function ProjectFloorPlanReviewStep({
                       </div>
                       <div>
                         <p className="text-[10px] uppercase text-[var(--muted-foreground)] mb-1">
-                          {t("project.dimWalls")}
+                          {lengthUnit === "ft" ? t("project.dimWallsFt") : t("project.dimWalls")}
                         </p>
                         <div className="grid grid-cols-2 gap-2">
                           {poly.map((_, i) => {
@@ -2700,7 +3260,9 @@ function ProjectFloorPlanReviewStep({
                       const fKey = `${selectedRoom.id}:${key}`;
                       return (
                         <div key={key}>
-                          <label className="text-[10px] uppercase text-[var(--muted-foreground)]">{key} (m)</label>
+                          <label className="text-[10px] uppercase text-[var(--muted-foreground)]">
+                            {key} {lengthUnit === "ft" ? "(ft)" : "(m)"}
+                          </label>
                           <input
                             type="number"
                             step="0.1"
@@ -5466,6 +6028,7 @@ function ProjectCompleteStep({
   const furnishedPlanRender = useConsumerDesignStore((s) => s.projectFurnishedPlanRender);
   const roomRenders = rooms.filter((r) => r.renders.length > 0);
   const hasFurnishedPlan = !!furnishedPlanRender?.base64;
+  const show3D = process.env.NEXT_PUBLIC_VISTA_3D_PROJECT === "1" && !!analysis;
 
   return (
     <div className="flex flex-col items-center gap-6">
@@ -5496,6 +6059,16 @@ function ProjectCompleteStep({
               className="w-full object-contain bg-[var(--muted)]"
             />
           </div>
+        </div>
+      )}
+
+      {show3D && analysis && (
+        <div className="w-full max-w-3xl">
+          <p className="text-sm font-semibold text-center mb-2">Your apartment in 3D</p>
+          <Apartment3DViewer analysis={analysis} rooms={rooms} height={520} />
+          <p className="text-xs text-center text-[var(--muted-foreground)] mt-2">
+            Click a room to view its interior design.
+          </p>
         </div>
       )}
 

@@ -18,12 +18,39 @@ import {
   deriveWallSegments,
   describeOpening,
   dimensionsFromPolygon,
+  nearestEdgeToPoint,
   polygonArea,
+  remapOpeningToPolygon,
   repairOpeningAnchors,
   sanitizePolygon,
+  snapAndCloseGaps,
 } from "./floorPlanGeometry";
 import type { Point } from "./floorPlanGeometry";
 import type { DetectedRoom, FloorPlanAnalysis, PlanColumn, RoomType, UtilityEntryPoint, UtilityPointType } from "./types";
+import {
+  cropImageBase64ToInset,
+  detectPlanContentInset,
+  remapAnalysisFromCropToFull,
+  remapRawParsedFromCropToFull,
+  type PlanContentInset,
+} from "./floorPlanContentCrop";
+import { detectFloorPlanWithRoboflow, remapRoboflowPayloadToFullImage, type RoboflowFloorPlanDetectResult } from "./roboflowFloorPlanDetect";
+import { detectDualPlanPanelInsets } from "./floorPlanPanelRegions";
+import {
+  assessCvGptOpeningDisagreement,
+  buildCvGeometryPriorBlock,
+  snapOpeningsToCvDetections,
+} from "./floorPlanCvPrior";
+import { buildNormalizedOverlay } from "./floorPlanDetections";
+import {
+  applyOcrScaleToAnalysis,
+  ocrLabelsFromParsedRaw,
+} from "./floorPlanOcrScale";
+import {
+  classifyFloorPlanUploadKind,
+  uploadKindPromptHint,
+} from "./floorPlanUploadKind";
+import type { RoboflowDetectPayload } from "./floorPlanDetections";
 
 const ROOM_TYPES_LIST: RoomType[] = [
   "hallway", "living", "kitchen", "bedroom", "children",
@@ -37,6 +64,19 @@ const UTILITY_POINT_TYPES: UtilityPointType[] = [
   "electrical_panel",
   "gas_inlet",
 ];
+
+/** Max withRetry attempts for floor-plan vision (0 = exactly one OpenAI request). */
+export const FLOOR_PLAN_VISION_MAX_RETRIES = 0;
+
+export function isFloorPlanGeometryRetryEnabled(): boolean {
+  return process.env.FLOOR_PLAN_GEOMETRY_RETRY?.trim() === "1";
+}
+
+export type AnalyzeFloorPlanOptions = {
+  onProgress?: (progress: number, message: string) => void;
+  /** Client-side Roboflow result from upload overlay — skips server re-inference when set. */
+  clientRoboflow?: RoboflowFloorPlanDetectResult | null;
+};
 
 function buildManualSeedBlock(manualPlan?: FloorPlanAnalysis): string {
   const rooms = manualPlan?.rooms?.filter((r) => (r.polygon?.length ?? 0) >= 3) ?? [];
@@ -146,28 +186,37 @@ All polygon, wallSegment, and utilityPoint x/y values are in the image coordinat
 }
 
 /** Prompt for upload-only auto-detect: rooms, doors, windows, columns only. */
-function buildAutoDetectFloorPlanPrompt(userAreaM2?: number): string {
+function buildAutoDetectFloorPlanPrompt(
+  userAreaM2?: number,
+  extras?: { cvPrior?: string; uploadKindHint?: string },
+): string {
   const areaHint = userAreaM2
     ? `\nThe user states the total apartment area is approximately ${userAreaM2} m². Use this to calibrate your dimension estimates.`
     : "";
+  const extraBlocks = [extras?.uploadKindHint, extras?.cvPrior].filter(Boolean).join("");
 
   return `You are an expert architectural analyst. Analyze the floor plan image and extract ONLY: rooms, doors, windows, and freestanding structural columns.
+${areaHint}${extraBlocks}
 
-${areaHint}
-
-COORDINATE SYSTEM — trace rooms ONTO the image like tracing paper:
-- LEFT edge of image is x=0; RIGHT edge is x=1000.
-- y uses the SAME scale as x and grows DOWNWARD: TOP is y=0, y increases toward the BOTTOM.
-- Every polygon vertex must match where that corner APPEARS in the image.
+COORDINATE SYSTEM — you are tracing rooms ONTO the image like drawing on tracing paper laid over it:
+- The image's LEFT edge is x=0; its RIGHT edge is x=1000.
+- y uses the SAME scale as x and grows DOWNWARD: the TOP edge is y=0, y increases toward the BOTTOM. Keep x and y on ONE common scale (the system computes the image's true height from its pixels).
+- Every polygon vertex MUST be the location of that corner AS IT APPEARS in the image. Do NOT invent an abstract or idealized layout — read the REAL pixel position of each room corner and each wall.
+- If the plan is drawn or photographed at a slight angle, trace it at that same angle. Do NOT rotate, straighten, or square-up the layout to make it axis-aligned — follow the actual wall lines even when they are not perfectly horizontal/vertical.
 
 INSTRUCTIONS:
-1. Identify EVERY distinct room/space. Use printed labels when visible; otherwise infer from layout.
-2. For each room, trace its TRUE outline as a closed polygon (4+ points; more for L-shaped or curved walls).
-3. Rooms MUST NOT overlap — they should tile the apartment footprint.
-4. Estimate each room's real-world dimensions in METERS from annotations or area labels on the plan.
+1. Identify EVERY distinct room/space. Use printed labels when visible (e.g. "BEDROOM", "BATH", "CL" = closet, "W/D" = washer/dryer); otherwise infer from layout (kitchens have counters, baths have fixtures). A combined open space labeled like "LIVING/DINING/KITCHEN" is ONE room — do NOT split it.
+2. For each room, trace its TRUE outline as a closed polygon. Use 4 points for a simple rectangle and MORE points for L-shaped/irregular rooms — do NOT flatten a non-rectangular room into a rectangle.
+3. Rooms MUST NOT overlap. Two rooms never occupy the same area; adjacent rooms share a common wall line (edges touch but do not cross). The polygons must TILE the footprint with no gaps and no overlaps. Before answering, double-check that no room sits on top of another.
+4. Estimate each room's real-world dimensions in METERS. READ the printed dimension strings and area labels on the plan and CONVERT units:
+   - Feet-and-inches like 19'-0" or 10'-6" → meters (feet × 0.3048; add inches × 0.0254).
+   - Square-feet labels like "110 SF" or "307 SF" → m² (square-feet × 0.0929).
+   - Metric labels like "14.7 m²" or millimetres (e.g. 3600) → use directly / convert mm→m.
+   Prefer printed numbers over visual guessing. Set each room's estimatedArea from its area label when one is printed.
 5. Assume ceiling height 2.7m unless the plan says otherwise.
-6. Identify all doors and windows on wall segments. For each opening report edgeIndex (0-based polygon edge) and t (0..1 along that edge), plus compass position text.
-7. Identify freestanding load-bearing COLUMNS only when the plan shows an explicit column symbol (filled square/circle) inside a room — NOT wall jogs, L-corners, or notches. Report each column's center position in image coordinates and approximate width/depth in meters.
+5b. MULTI-FLOOR SHEETS: When the image contains TWO side-by-side unit plans (common on architectural sheets — e.g. ADU #2 / 2nd floor on the LEFT, ADU #1 / 1st floor on the RIGHT), return ALL rooms from BOTH plans in one "rooms" array. Each room MUST include "floorLevel": 1 for ADU #1 (right plan), 2 for ADU #2 (left plan). Use ONE shared image coordinate system (full upload: x 0..1000, y downward). Do NOT merge the two footprints into one layout. Ignore legend, keynotes, schedules, and title block — trace only the two plan panels.
+6. Identify all doors and windows. On a plan these are breaks in the wall line: a DOOR is a gap, usually with a thin quarter-circle swing arc; a WINDOW is a gap spanned by a thin line or 2-3 short parallel lines across the wall thickness. Scan every wall carefully — these marks are small and thin. Do NOT report an opening where the wall is solid, and do NOT miss a small break. For each opening report edgeIndex (0-based polygon edge: edge 0 = vertex 0→1, edge 1 = vertex 1→2, …) and t (0.0 = edge start, 0.5 = center, 1.0 = edge end), a compass "position" string ("north"=top/smaller y, "south"=bottom, "east"=right, "west"=left), and the opening's center point "x"/"y" in image coordinates (same 0..1000 frame as the polygon) so its exact spot on the wall can be verified.
+7. Identify freestanding load-bearing COLUMNS only when the plan shows an explicit column symbol (filled square/circle) inside a room — NOT wall jogs, L-corners, or notches.
 
 Room types: ${ROOM_TYPES_LIST.join(", ")}
 
@@ -175,6 +224,7 @@ Respond ONLY with valid JSON:
 {
   "totalArea": number (m²),
   "ceilingHeight": number (default 2.7),
+  "imageHeightUnits": number (OPTIONAL — keep every y on the same scale as x; the system uses the real pixel ratio),
   "overallShape": "string",
   "notes": "string",
   "rooms": [
@@ -182,10 +232,11 @@ Respond ONLY with valid JSON:
       "id": "string",
       "name": "string",
       "type": "string",
+      "floorLevel": 1 or 2 (required when two plans appear on one sheet; otherwise omit or use 1),
       "estimatedArea": number,
       "dimensions": { "width": number, "depth": number, "height": number },
-      "windows": [{ "position": "string", "width": number, "height": number, "edgeIndex": number, "t": number }],
-      "doors": [{ "position": "string", "width": number, "height": number, "connectsTo": "string", "edgeIndex": number, "t": number }],
+      "windows": [{ "position": "string", "width": number, "height": number, "edgeIndex": number, "t": number, "x": number, "y": number }],
+      "doors": [{ "position": "string", "width": number, "height": number, "connectsTo": "string", "edgeIndex": number, "t": number, "x": number, "y": number }],
       "polygon": [[x, y], ...]
     }
   ],
@@ -199,10 +250,11 @@ Respond ONLY with valid JSON:
       "roomId": "string (optional)",
       "shape": "square | rectangular | circular"
     }
-  ]
+  ],
+  "printedLabels": ["string (optional — every dimension/area label you read on the plan, verbatim)"]
 }
 
-All room polygon and column x/y values use image coordinates (x 0..1000, y downward). Real sizes in meters. Do NOT include utility points, wall segment arrays, or generic features.`;
+All room polygon and column x/y values use image coordinates (x 0..1000, y downward, same scale). Real-world sizes go in the meter "dimensions" and "estimatedArea" fields. No two room polygons may overlap. Do NOT include utility points, wall segment arrays, or generic features.`;
 }
 
 function asColumnShape(v: unknown): PlanColumn["shape"] | undefined {
@@ -221,6 +273,11 @@ function asNumber(v: unknown, fallback: number): number {
 
 function asString(v: unknown, fallback: string): string {
   return typeof v === "string" && v.trim() ? v.trim() : fallback;
+}
+
+function asFloorLevel(v: unknown): 1 | 2 {
+  const n = Number(v);
+  return n === 2 ? 2 : 1;
 }
 
 function asRoomType(v: unknown): RoomType {
@@ -344,6 +401,7 @@ export function normalizeAnalysis(raw: unknown): FloorPlanAnalysis {
           id: asString(r.id, `room-${i + 1}`).replace(/[\/\\?#%\s]+/g, "-"),
           name: asString(r.name, `Room ${i + 1}`),
           type: asRoomType(r.type),
+          floorLevel: asFloorLevel(r.floorLevel),
           estimatedArea: asNumber(r.estimatedArea, 0),
           dimensions: {
             width: asNumber(dims.width, 3),
@@ -438,52 +496,138 @@ function bboxOverlapArea(
  * This prints the overall bbox aspect ratio plus the worst pairwise bbox overlap
  * so a real upload confirms (vs. just describing) the "wrong plan" symptom.
  */
-function logGeometryDiagnostics(analysis: FloorPlanAnalysis): void {
+export interface GeometryQuality {
+  /** Rooms with a valid (≥3-vertex) polygon. */
+  roomCount: number;
+  /** Worst pairwise bbox overlap as a percentage of the smaller room's bbox. */
+  worstOverlapPct: number;
+  /** Overall room-bbox aspect ratio (width / height). */
+  aspect: number;
+  /** True when the geometry looks wrong enough to escalate to the fallback model. */
+  problematic: boolean;
+}
+
+/**
+ * Pure geometry-quality assessment — used both for diagnostics logging and to
+ * decide whether to re-run on the fallback model. `expectedAspect` (real image
+ * width/height) flags a layout whose overall shape is wildly off the image.
+ * Works in any consistent coordinate space (image units or mm).
+ */
+export function assessGeometryQuality(
+  analysis: FloorPlanAnalysis,
+  expectedAspect?: number,
+): GeometryQuality {
   const withPoly = analysis.rooms.filter((r) => (r.polygon?.length ?? 0) >= 3);
-  if (withPoly.length === 0) {
-    pipelineLog("FLOOR_PLAN_RESULTS", "geom — no room polygons", {}, "warn");
-    return;
-  }
-  const boxes = withPoly.map((r) => ({ room: r, bbox: polygonBBox(r.polygon!) }));
+  const roomCount = withPoly.length;
+  if (roomCount === 0) return { roomCount: 0, worstOverlapPct: 0, aspect: 0, problematic: true };
+
+  const boxes = withPoly.map((r) => polygonBBox(r.polygon!));
   const overall = boxes.reduce(
-    (acc, { bbox }) => ({
-      minX: Math.min(acc.minX, bbox.minX), minY: Math.min(acc.minY, bbox.minY),
-      maxX: Math.max(acc.maxX, bbox.maxX), maxY: Math.max(acc.maxY, bbox.maxY),
+    (acc, b) => ({
+      minX: Math.min(acc.minX, b.minX), minY: Math.min(acc.minY, b.minY),
+      maxX: Math.max(acc.maxX, b.maxX), maxY: Math.max(acc.maxY, b.maxY),
     }),
     { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
   );
   const overallW = overall.maxX - overall.minX;
   const overallH = overall.maxY - overall.minY;
-  pipelineLog("FLOOR_PLAN_RESULTS", "geom — overall bbox", {
-    roomCount: boxes.length,
-    overallW: Math.round(overallW),
-    overallH: Math.round(overallH),
-    aspect: Number((overallW / (overallH || 1)).toFixed(2)),
-  });
-  let worst = { a: "", b: "", frac: 0 };
+  const aspect = overallW / (overallH || 1);
+
+  let worstFrac = 0;
   for (let i = 0; i < boxes.length; i++) {
     for (let j = i + 1; j < boxes.length; j++) {
-      const ov = bboxOverlapArea(boxes[i].bbox, boxes[j].bbox);
+      const ov = bboxOverlapArea(boxes[i], boxes[j]);
       if (ov <= 0) continue;
-      const smaller = Math.min(
-        boxes[i].bbox.w * boxes[i].bbox.h,
-        boxes[j].bbox.w * boxes[j].bbox.h,
-      ) || 1;
-      const frac = ov / smaller;
-      if (frac > worst.frac) {
-        worst = { a: `${boxes[i].room.id}/"${boxes[i].room.name}"`, b: `${boxes[j].room.id}/"${boxes[j].room.name}"`, frac };
-      }
+      const smaller = Math.min(boxes[i].w * boxes[i].h, boxes[j].w * boxes[j].h) || 1;
+      worstFrac = Math.max(worstFrac, ov / smaller);
     }
   }
-  if (worst.frac > 0) {
-    pipelineLog("FLOOR_PLAN_RESULTS", "geom — room overlap detected", {
-      roomA: worst.a,
-      roomB: worst.b,
-      overlapPct: Math.round(worst.frac * 100),
-    }, "warn");
+  const worstOverlapPct = Math.round(worstFrac * 100);
+
+  const aspectOff =
+    expectedAspect != null && expectedAspect > 0 && aspect > 0
+      ? Math.max(aspect / expectedAspect, expectedAspect / aspect) > 2.5
+      : false;
+  const problematic = worstOverlapPct > 15 || aspectOff;
+  return { roomCount, worstOverlapPct, aspect: Number(aspect.toFixed(2)), problematic };
+}
+
+function logGeometryDiagnostics(analysis: FloorPlanAnalysis, expectedAspect?: number): void {
+  const q = assessGeometryQuality(analysis, expectedAspect);
+  if (q.roomCount === 0) {
+    pipelineLog("FLOOR_PLAN_RESULTS", "geom — no room polygons", {}, "warn");
+    return;
+  }
+  pipelineLog("FLOOR_PLAN_RESULTS", "geom — overall bbox", {
+    roomCount: q.roomCount,
+    aspect: q.aspect,
+    expectedAspect: expectedAspect ? Number(expectedAspect.toFixed(2)) : null,
+  });
+  if (q.worstOverlapPct > 0) {
+    pipelineLog(
+      "FLOOR_PLAN_RESULTS",
+      "geom — room overlap detected",
+      { overlapPct: q.worstOverlapPct, problematic: q.problematic },
+      "warn",
+    );
   } else {
     pipelineLog("FLOOR_PLAN_RESULTS", "geom — no pairwise overlaps");
   }
+}
+
+/**
+ * When an opening reports a pixel center (x,y in image space), snap its anchor
+ * to the nearest polygon edge — overriding a possibly-garbled edgeIndex/t with
+ * the geometrically correct wall. Openings without x/y are left untouched.
+ * `rawParsed` is the model's raw JSON (x/y aren't kept on the typed model).
+ */
+export function reconcileOpeningPixels(
+  analysis: FloorPlanAnalysis,
+  rawParsed: unknown,
+): FloorPlanAnalysis {
+  const rawRooms = isRecord(rawParsed) && Array.isArray(rawParsed.rooms)
+    ? rawParsed.rooms.filter(isRecord)
+    : [];
+  if (rawRooms.length === 0) return analysis;
+
+  const snapList = <T extends { edgeIndex?: number; t?: number; position: string }>(
+    openings: T[],
+    rawOpenings: unknown[],
+    polygon: Point[],
+  ): T[] =>
+    openings.map((o, j) => {
+      const raw = rawOpenings[j];
+      if (!isRecord(raw)) return o;
+      const x = Number(raw.x);
+      const y = Number(raw.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || polygon.length < 3) return o;
+      const snap = nearestEdgeToPoint(polygon, [x, y]);
+      return {
+        ...o,
+        edgeIndex: snap.edgeIndex,
+        t: snap.t,
+        position: describeOpening(polygon, snap.edgeIndex, snap.t),
+      };
+    });
+
+  return {
+    ...analysis,
+    rooms: analysis.rooms.map((room, i) => {
+      const raw = rawRooms[i];
+      const poly = room.polygon ?? [];
+      if (!isRecord(raw) || poly.length < 3) return room;
+      // Filter isRecord to match normalizeAnalysis (which drops non-record raw
+      // openings before mapping) so these stay index-aligned with room.windows/
+      // room.doors — otherwise a stray non-record entry desyncs the pixel-snap.
+      const rawWindows = (Array.isArray(raw.windows) ? raw.windows : []).filter(isRecord);
+      const rawDoors = (Array.isArray(raw.doors) ? raw.doors : []).filter(isRecord);
+      return {
+        ...room,
+        windows: snapList(room.windows, rawWindows, poly),
+        doors: snapList(room.doors, rawDoors, poly),
+      };
+    }),
+  };
 }
 
 /**
@@ -523,7 +667,12 @@ export function anchorAnalysisToImage(
     (sum, r) => sum + (r.polygon && r.polygon.length >= 3 ? polygonArea(r.polygon) : 0),
     0,
   );
-  const targetAreaM2 = userAreaM2 && userAreaM2 > 0 ? userAreaM2 : analysis.totalArea;
+  // Scale target (m²): the user's stated area wins; otherwise ground it in the
+  // sum of per-room area labels the model read from the plan (SF/m² labels),
+  // falling back to the model's single totalArea guess.
+  const sumRoomAreas = analysis.rooms.reduce((s, r) => s + (r.estimatedArea > 0 ? r.estimatedArea : 0), 0);
+  const targetAreaM2 =
+    userAreaM2 && userAreaM2 > 0 ? userAreaM2 : sumRoomAreas > 0 ? sumRoomAreas : analysis.totalArea;
   const scale =
     targetAreaM2 > 0 && footprintUnits > 0
       ? Math.sqrt((targetAreaM2 * 1_000_000) / footprintUnits)
@@ -671,6 +820,111 @@ export function finalizeManualFloorPlan(
   return result;
 }
 
+function geometryQualityScore(q: GeometryQuality, expectedAspect?: number): number {
+  let score = q.worstOverlapPct;
+  if (expectedAspect != null && expectedAspect > 0 && q.aspect > 0) {
+    score += Math.abs(Math.log(q.aspect / expectedAspect)) * 15;
+  }
+  return score;
+}
+
+/** Auto-detect post-pass: opening reconcile, anchor, snap, walls, geometry quality. */
+function buildAutoDetectResult(
+  analysis: FloorPlanAnalysis,
+  parsed: unknown,
+  imageHeightUnits: number,
+  userAreaM2: number | undefined,
+  expectedAspect: number | undefined,
+  contentInset: PlanContentInset | null | undefined,
+  hybrid?: {
+    roboflowPayload: RoboflowDetectPayload | null;
+    uploadKind: FloorPlanAnalysis["uploadKind"];
+  },
+): FloorPlanAnalysis {
+  let working = analysis;
+  let raw = parsed;
+  if (contentInset && imageHeightUnits > 0) {
+    working = remapAnalysisFromCropToFull(working, contentInset, imageHeightUnits);
+    raw = remapRawParsedFromCropToFull(raw, contentInset, imageHeightUnits);
+  }
+
+  working = reconcileOpeningPixels(working, raw);
+
+  const ocrLabels = ocrLabelsFromParsedRaw(raw);
+
+  let cvReview: ReturnType<typeof assessCvGptOpeningDisagreement> | undefined;
+  if (hybrid?.roboflowPayload && imageHeightUnits > 0) {
+    const snapped = snapOpeningsToCvDetections(
+      working,
+      raw,
+      hybrid.roboflowPayload,
+      imageHeightUnits,
+    );
+    working = snapped.analysis;
+    raw = snapped.rawParsed;
+    cvReview = assessCvGptOpeningDisagreement(
+      working,
+      hybrid.roboflowPayload,
+      imageHeightUnits,
+    );
+  }
+
+  let anchored = anchorAnalysisToImage(working, imageHeightUnits, userAreaM2);
+  let ocrScaleConfidence: number | undefined;
+  if (ocrLabels.length) {
+    const scaled = applyOcrScaleToAnalysis(anchored, ocrLabels, userAreaM2);
+    anchored = scaled.analysis;
+    ocrScaleConfidence = scaled.ocrScaleConfidence;
+  }
+
+  const snappedPolys = snapAndCloseGaps(
+    anchored.rooms.map((r) => r.polygon ?? []),
+    50,
+    150,
+  );
+  const snappedRooms: DetectedRoom[] = anchored.rooms.map((room, i) => {
+    const poly = snappedPolys[i];
+    if (!poly || poly.length < 3) return room;
+    const oldPoly = room.polygon ?? [];
+    return {
+      ...room,
+      polygon: poly,
+      windows: room.windows.map((w) => remapOpeningToPolygon(w, oldPoly, poly)),
+      doors: room.doors.map((d) => remapOpeningToPolygon(d, oldPoly, poly)),
+      dimensions: dimensionsFromPolygon(poly, room.dimensions.height || 2.7),
+      estimatedArea: Math.round((polygonArea(poly) / 1_000_000) * 10) / 10,
+    };
+  });
+
+  const polys = snappedRooms.map((r) => r.polygon ?? []).filter((p) => p.length >= 3);
+  const geometryQuality = assessGeometryQuality(
+    { ...anchored, rooms: snappedRooms },
+    expectedAspect,
+  );
+
+  const cvDetectionsNormalized = hybrid?.roboflowPayload
+    ? buildNormalizedOverlay(hybrid.roboflowPayload)
+    : undefined;
+
+  return {
+    ...anchored,
+    rooms: snappedRooms,
+    wallSegments: deriveWallSegments(polys),
+    sharedWalls: computeSharedWalls(snappedRooms),
+    totalArea:
+      userAreaM2 && userAreaM2 > 0
+        ? userAreaM2
+        : anchored.totalArea ||
+          Math.round(snappedRooms.reduce((s, r) => s + (r.estimatedArea || 0), 0) * 10) / 10,
+    geometryQuality,
+    uploadKind: hybrid?.uploadKind,
+    cvReview,
+    ocrScaleConfidence,
+    cvDetectionsNormalized,
+    ...(contentInset ? { contentInset } : {}),
+  };
+}
+
 export async function analyzeFloorPlan(
   imageBase64: string,
   imageMimeType: string,
@@ -678,6 +932,7 @@ export async function analyzeFloorPlan(
   manualPlan?: FloorPlanAnalysis,
   drawnPlanBase64?: string,
   drawnPlanMimeType?: string,
+  options?: AnalyzeFloorPlanOptions,
 ): Promise<FloorPlanAnalysis> {
   const seeded = (manualPlan?.rooms?.filter((r) => (r.polygon?.length ?? 0) >= 3).length ?? 0) > 0;
 
@@ -695,17 +950,18 @@ export async function analyzeFloorPlan(
 
   const hasDrawnImage = Boolean(drawnPlanBase64);
 
-  // Fast primary + slow fallback: run a cheap/fast vision model first; only fall
-  // back to the heavier model if it fails or returns low-confidence geometry.
-  // FLOOR_PLAN_ANALYSIS_MODEL is the floor-plan primary knob (default gpt-4o);
-  // the shared viewpoint/validate call sites keep their own gpt-5.5 default.
-  const floorPlanPrimaryModel = process.env.FLOOR_PLAN_ANALYSIS_MODEL?.trim() || "gpt-4o";
-  const floorPlanFallbackModel =
-    process.env.FLOOR_PLAN_ANALYSIS_FALLBACK_MODEL?.trim() || "gpt-5.5";
+  // SINGLE vision request per analyze — one billed call, no correction/fallback
+  // pass. Defaults to gpt-5.5 at MEDIUM effort: high effort routinely exceeded the
+  // 180s vision headersTimeout (openAiFetch.ts), so a slow-but-succeeding call got
+  // killed + retried — ~6 min stuck at 90% then a timeout error, double-billed.
+  // Medium returns comfortably under the timeout. FLOOR_PLAN_ANALYSIS_MODEL /
+  // _REASONING_EFFORT override (set effort to `high` for max accuracy on complex plans).
+  const floorPlanModel = process.env.FLOOR_PLAN_ANALYSIS_MODEL?.trim() || "gpt-5.5";
+  const floorPlanEffort = process.env.FLOOR_PLAN_ANALYSIS_REASONING_EFFORT?.trim() || "medium";
 
   pipelineLog("ANALYZE_FLOOR_PLAN", "openai floor plan analysis start", {
-    model: floorPlanPrimaryModel,
-    fallbackModel: floorPlanFallbackModel,
+    model: floorPlanModel,
+    effort: floorPlanEffort,
     mimeType: imageMimeType,
     planKB: Math.round((imageBase64.length * 3) / 4 / 1024),
     hasDrawnPlan: hasDrawnImage,
@@ -728,37 +984,40 @@ export async function analyzeFloorPlan(
     );
   }
 
-  const systemPrompt = hasDrawnImage
-    ? buildFloorPlanAnalysisPrompt(userAreaM2, manualPlan, true)
-    : buildAutoDetectFloorPlanPrompt(userAreaM2);
+  const systemPromptDrawn = buildFloorPlanAnalysisPrompt(userAreaM2, manualPlan, true);
 
   type ContentPart =
     | { type: "text"; text: string }
     | { type: "image_url"; image_url: { url: string; detail: "high" } };
-  const content: ContentPart[] = [
-    { type: "text", text: systemPrompt },
-    { type: "image_url", image_url: { url: `data:${imageMimeType};base64,${imageBase64}`, detail: "high" } },
-  ];
-  if (hasDrawnImage && drawnPlanBase64) {
-    content.push({
-      type: "text",
-      text: "The SECOND image is the user's own schematic drawing of the SAME floor plan — room shapes, doors (orange with swing arcs), and windows (blue) are marked. Treat it as the authoritative layout.",
-    });
-    content.push({
-      type: "image_url",
-      image_url: { url: `data:${drawnPlanMimeType ?? "image/png"};base64,${drawnPlanBase64}`, detail: "high" },
-    });
-  }
 
   const apiUrl = process.env.OPENAI_API_URL || "https://api.openai.com/v1/chat/completions";
 
-  // Run one OpenAI vision pass with the given model → parsed + normalized analysis.
-  // Throws on request failure or empty/unparseable response.
   const runFloorPlanPass = async (
     model: string,
+    effort: string,
+    planBase64: string,
+    planMime: string,
+    systemPrompt: string,
   ): Promise<{ parsed: unknown; analysis: FloorPlanAnalysis }> => {
+    const content: ContentPart[] = [
+      { type: "text", text: systemPrompt },
+      { type: "image_url", image_url: { url: `data:${planMime};base64,${planBase64}`, detail: "high" } },
+    ];
+    if (hasDrawnImage && drawnPlanBase64) {
+      content.push({
+        type: "text",
+        text: "The SECOND image is the user's own schematic drawing of the SAME floor plan — room shapes, doors (orange with swing arcs), and windows (blue) are marked. Treat it as the authoritative layout.",
+      });
+      content.push({
+        type: "image_url",
+        image_url: { url: `data:${drawnPlanMimeType ?? "image/png"};base64,${drawnPlanBase64}`, detail: "high" },
+      });
+    }
+
+    const isGpt4 = model.startsWith("gpt-4");
     pipelineLog("ANALYZE_FLOOR_PLAN", "OpenAI floor-plan request", {
       model,
+      effort: isGpt4 ? null : effort,
       hasDrawnImage,
       autoDetect: !hasDrawnImage,
     });
@@ -777,6 +1036,10 @@ export async function analyzeFloorPlan(
             messages: [{ role: "user", content }],
             response_format: { type: "json_object" },
             max_completion_tokens: 16000,
+            // Determinism helps accuracy, but gpt-5-class models reject a
+            // non-default temperature — only pin it for gpt-4-class models.
+            // reasoning_effort is the opposite: gpt-5-class only.
+            ...(isGpt4 ? { temperature: 0 } : { reasoning_effort: effort }),
           }),
         },
         { vision: true },
@@ -790,9 +1053,10 @@ export async function analyzeFloorPlan(
         throw err;
       }
       return res.json();
-    }, `Floor plan analysis (${model})`);
+    }, `Floor plan analysis (${model})`, FLOOR_PLAN_VISION_MAX_RETRIES, { retryOnTimeout: false });
     pipelineLog("ANALYZE_FLOOR_PLAN", "OpenAI floor-plan response", {
       model,
+      effort: isGpt4 ? null : effort,
       durationSec: Math.round((Date.now() - t0) / 1000),
     });
 
@@ -804,73 +1068,232 @@ export async function analyzeFloorPlan(
     return { parsed: parsedPass, analysis: normalizeAnalysis(parsedPass) };
   };
 
-  // Low confidence if no rooms were detected — a floor plan always has ≥1 room.
-  const isLowConfidence = (a: FloorPlanAnalysis): boolean => a.rooms.length === 0;
-
-  let parsed: unknown;
-  let analysis: FloorPlanAnalysis;
-  try {
-    ({ parsed, analysis } = await runFloorPlanPass(floorPlanPrimaryModel));
-    if (isLowConfidence(analysis) && floorPlanPrimaryModel !== floorPlanFallbackModel) {
-      pipelineLog(
-        "ANALYZE_FLOOR_PLAN",
-        "primary model low-confidence — falling back",
-        { primaryModel: floorPlanPrimaryModel, fallbackModel: floorPlanFallbackModel },
-        "warn",
-      );
-      ({ parsed, analysis } = await runFloorPlanPass(floorPlanFallbackModel));
-    }
-  } catch (primaryErr) {
-    if (floorPlanPrimaryModel === floorPlanFallbackModel) throw primaryErr;
-    pipelineLog(
-      "ANALYZE_FLOOR_PLAN",
-      "primary model failed — falling back",
-      {
-        primaryModel: floorPlanPrimaryModel,
-        fallbackModel: floorPlanFallbackModel,
-        error: primaryErr instanceof Error ? primaryErr.message.slice(0, 200) : String(primaryErr),
-      },
-      "warn",
-    );
-    ({ parsed, analysis } = await runFloorPlanPass(floorPlanFallbackModel));
-  }
-
-  const modelImageHeightUnits = asNumber(isRecord(parsed) ? parsed.imageHeightUnits : undefined, 0);
-  const imageHeightUnits = trueImageHeightUnits > 0 ? trueImageHeightUnits : modelImageHeightUnits;
+  // Expected overall aspect = real image width/height (x spans 0..1000).
+  const expectedAspect = trueImageHeightUnits > 0 ? 1000 / trueImageHeightUnits : undefined;
 
   if (hasDrawnImage && manualPlan) {
-    analysis = mergeOpeningsIntoManualPlan(manualPlan, analysis);
+    const drawnPass = await runFloorPlanPass(
+      floorPlanModel,
+      floorPlanEffort,
+      imageBase64,
+      imageMimeType,
+      systemPromptDrawn,
+    );
+    const modelImageHeightUnits = asNumber(
+      isRecord(drawnPass.parsed) ? drawnPass.parsed.imageHeightUnits : undefined,
+      0,
+    );
+    const imageHeightUnits = trueImageHeightUnits > 0 ? trueImageHeightUnits : modelImageHeightUnits;
+    let analysis = mergeOpeningsIntoManualPlan(manualPlan, drawnPass.analysis);
     const anchored = anchorAnalysisToImage(
       { ...analysis, rooms: manualPlan.rooms, wallSegments: manualPlan.wallSegments ?? [] },
       imageHeightUnits,
       userAreaM2,
     );
-    logGeometryDiagnostics(anchored);
+    const geometryQuality = assessGeometryQuality(anchored, expectedAspect);
+    logGeometryDiagnostics(anchored, expectedAspect);
     pipelineLog("ANALYZE_FLOOR_PLAN", "openai floor plan analysis complete", {
       mode: "drawn-image-merge",
       roomCount: anchored.rooms.length,
+      openAiVisionCalls: 1,
     });
-    return anchored;
+    return { ...anchored, geometryQuality };
   }
 
-  const anchored = anchorAnalysisToImage(analysis, imageHeightUnits, userAreaM2);
-  const polys = anchored.rooms.map((r) => r.polygon ?? []).filter((p) => p.length >= 3);
-  const result: FloorPlanAnalysis = {
-    ...anchored,
-    wallSegments: deriveWallSegments(polys),
-    sharedWalls: computeSharedWalls(anchored.rooms),
-    totalArea:
-      userAreaM2 && userAreaM2 > 0
-        ? userAreaM2
-        : anchored.totalArea ||
-          Math.round(anchored.rooms.reduce((s, r) => s + (r.estimatedArea || 0), 0) * 10) / 10,
+  const onProgress = options?.onProgress;
+  const fullMeta = await sharp(Buffer.from(imageBase64, "base64")).metadata().catch(() => null);
+  const fullW = fullMeta?.width ?? 0;
+  const fullH = fullMeta?.height ?? 0;
+
+  onProgress?.(0.15, "Detecting walls and openings…");
+
+  let contentInset: PlanContentInset | null = null;
+  let visionBase64 = imageBase64;
+  let visionMime = imageMimeType;
+  try {
+    contentInset = await detectPlanContentInset(imageBase64);
+  } catch (err) {
+    pipelineLog(
+      "ANALYZE_FLOOR_PLAN",
+      "content inset detection skipped",
+      { error: String(err).slice(0, 200) },
+      "warn",
+    );
+  }
+
+  let isDualPanel = false;
+  try {
+    const panels = await detectDualPlanPanelInsets(imageBase64);
+    isDualPanel = Boolean(panels && panels.length === 2);
+  } catch {
+    isDualPanel = false;
+  }
+
+  if (contentInset && !isDualPanel) {
+    try {
+      const cropped = await cropImageBase64ToInset(imageBase64, contentInset);
+      visionBase64 = cropped.base64;
+      visionMime = cropped.mimeType;
+      pipelineLog("ANALYZE_FLOOR_PLAN", "content crop for vision", {
+        inset: contentInset,
+      });
+    } catch (err) {
+      contentInset = null;
+      visionBase64 = imageBase64;
+      visionMime = imageMimeType;
+      pipelineLog(
+        "ANALYZE_FLOOR_PLAN",
+        "content crop skipped",
+        { error: String(err).slice(0, 200) },
+        "warn",
+      );
+    }
+  } else if (contentInset && isDualPanel) {
+    pipelineLog("ANALYZE_FLOOR_PLAN", "content crop skipped for dual-panel sheet", {});
+    contentInset = null;
+  }
+
+  let visionHeightUnits = trueImageHeightUnits;
+  if (visionBase64 !== imageBase64) {
+    try {
+      const vMeta = await sharp(Buffer.from(visionBase64, "base64")).metadata();
+      if (vMeta.width && vMeta.height) {
+        visionHeightUnits = (1000 * vMeta.height) / vMeta.width;
+      }
+    } catch {
+      /* keep full-frame units */
+    }
+  }
+
+  const rfT0 = Date.now();
+  let roboflowPayload: RoboflowDetectPayload | null = null;
+  let rfCrop: RoboflowDetectPayload | null = null;
+  let uploadKind: FloorPlanAnalysis["uploadKind"] = "clean_architectural";
+  const visionCropped = Boolean(contentInset && visionBase64 !== imageBase64);
+
+  try {
+    const clientRf =
+      options?.clientRoboflow?.predictions?.length && !visionCropped
+        ? options.clientRoboflow
+        : null;
+
+    const [rf, kind] = await Promise.all([
+      (async () => {
+        if (clientRf) return clientRf;
+        const visionBuffer = Buffer.from(visionBase64, "base64");
+        if (isDualPanel) {
+          return detectFloorPlanWithRoboflow(
+            Buffer.from(imageBase64, "base64"),
+            imageMimeType,
+          ).catch(() => null);
+        }
+        return detectFloorPlanWithRoboflow(visionBuffer, visionMime).catch(() => null);
+      })(),
+      classifyFloorPlanUploadKind(imageBase64),
+    ]);
+    uploadKind = kind;
+    if (rf) {
+      rfCrop = { image: rf.image, predictions: rf.predictions };
+      if (visionCropped && fullW > 0 && fullH > 0 && contentInset) {
+        roboflowPayload = remapRoboflowPayloadToFullImage(rfCrop, contentInset, fullW, fullH);
+      } else {
+        roboflowPayload = rfCrop;
+      }
+    }
+    pipelineLog("ANALYZE_FLOOR_PLAN", "hybrid prep", {
+      uploadKind,
+      cvBoxes: rf?.predictions.length ?? 0,
+      roboflowMs: Date.now() - rfT0,
+      usedClientRoboflow: Boolean(clientRf),
+      contentCrop: visionCropped,
+      dualPanel: isDualPanel,
+    });
+  } catch (err) {
+    pipelineLog(
+      "ANALYZE_FLOOR_PLAN",
+      "hybrid prep failed",
+      { error: String(err).slice(0, 200), roboflowMs: Date.now() - rfT0 },
+      "warn",
+    );
+  }
+
+  onProgress?.(0.35, "Reading room shapes…");
+
+  const visionRoboflowForPrior = visionCropped && rfCrop ? rfCrop : roboflowPayload;
+  const imageHeightForPrior = visionHeightUnits > 0 ? visionHeightUnits : trueImageHeightUnits || 1000;
+  const systemPromptAuto = buildAutoDetectFloorPlanPrompt(userAreaM2, {
+    cvPrior: buildCvGeometryPriorBlock(visionRoboflowForPrior, imageHeightForPrior),
+    uploadKindHint: uploadKindPromptHint(uploadKind),
+  });
+
+  const hybridContext = {
+    roboflowPayload,
+    uploadKind,
   };
 
-  logGeometryDiagnostics(result);
+  const runPassAndBuild = async (model: string, effort: string) => {
+    const pass = await runFloorPlanPass(model, effort, visionBase64, visionMime, systemPromptAuto);
+    const imageHeightUnits =
+      trueImageHeightUnits > 0 ? trueImageHeightUnits : asNumber(isRecord(pass.parsed) ? pass.parsed.imageHeightUnits : undefined, 0);
+    const result = buildAutoDetectResult(
+      pass.analysis,
+      pass.parsed,
+      imageHeightUnits,
+      userAreaM2,
+      expectedAspect,
+      contentInset,
+      hybridContext,
+    );
+    return { result, parsed: pass.parsed };
+  };
+
+  const openAiT0 = Date.now();
+  let { result } = await runPassAndBuild(floorPlanModel, floorPlanEffort);
+  let openAiVisionCalls = 1;
+
+  if (
+    isFloorPlanGeometryRetryEnabled() &&
+    result.geometryQuality?.problematic &&
+    floorPlanEffort !== "high"
+  ) {
+    const retryEffort = "high";
+    pipelineLog("ANALYZE_FLOOR_PLAN", "geometry problematic — retry pass", {
+      worstOverlapPct: result.geometryQuality.worstOverlapPct,
+      aspect: result.geometryQuality.aspect,
+      effort: retryEffort,
+    });
+    try {
+      const retry = await runPassAndBuild(floorPlanModel, retryEffort);
+      const firstScore = geometryQualityScore(result.geometryQuality!, expectedAspect);
+      const retryScore = geometryQualityScore(retry.result.geometryQuality!, expectedAspect);
+      if (retryScore < firstScore) {
+        result = retry.result;
+        openAiVisionCalls = 2;
+        pipelineLog("ANALYZE_FLOOR_PLAN", "retry pass selected (better geometry score)", {
+          firstScore,
+          retryScore,
+        });
+      }
+    } catch (err) {
+      pipelineLog(
+        "ANALYZE_FLOOR_PLAN",
+        "retry pass failed — keeping first result",
+        { error: String(err).slice(0, 200) },
+        "warn",
+      );
+    }
+  }
+
+  logGeometryDiagnostics(result, expectedAspect);
   pipelineLog("ANALYZE_FLOOR_PLAN", "openai floor plan analysis complete", {
     mode: "auto-detect",
     roomCount: result.rooms.length,
     columnCount: result.columns?.length ?? 0,
+    geometryProblematic: result.geometryQuality?.problematic ?? null,
+    contentCrop: visionCropped,
+    openAiVisionCalls,
+    openAiMs: Date.now() - openAiT0,
+    roboflowMs: Date.now() - rfT0,
     rooms: result.rooms.map((r) => ({
       roomId: r.id,
       name: r.name,

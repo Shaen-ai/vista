@@ -111,6 +111,8 @@ export interface DetectedRoom {
   features: string[];
   /** Polygon vertices (in mm) for the room boundary, used for SVG drawing. */
   polygon?: [number, number][];
+  /** Multi-floor sheets: 1 = ADU #1 (typically right plan), 2 = ADU #2 (typically left). */
+  floorLevel?: 1 | 2;
 }
 
 /** Freestanding structural column detected on the floor plan (not wall jogs). */
@@ -166,6 +168,37 @@ export interface FloorPlanAnalysis {
   sharedWalls?: SharedWall[];
   /** Freestanding load-bearing columns detected on the plan. */
   columns?: PlanColumn[];
+  /** Auto-detect geometry quality (overlap / aspect vs image). */
+  geometryQuality?: {
+    roomCount: number;
+    worstOverlapPct: number;
+    aspect: number;
+    problematic: boolean;
+  };
+  /** When set, vision ran on a content crop; polygons are anchored to the full upload. */
+  contentInset?: { left: number; top: number; width: number; height: number };
+  /** Heuristic upload classifier used during hybrid analyze. */
+  uploadKind?: "clean_architectural" | "dense_permit_sheet" | "furnished_marketing";
+  /** CV vs GPT opening disagreement summary. */
+  cvReview?: {
+    cvDoorCount: number;
+    cvWindowCount: number;
+    gptDoorCount: number;
+    gptWindowCount: number;
+    unmatchedOpeningCount: number;
+    problematic: boolean;
+  };
+  /** Confidence 0..1 when OCR labels rescale the anchored plan. */
+  ocrScaleConfidence?: number;
+  /** Normalized Roboflow overlay for confirm-plan CV actions (0–1 coords). */
+  cvDetectionsNormalized?: Array<{
+    class: "wall" | "window" | "door";
+    confidence: number;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -466,11 +499,14 @@ export interface RoomResult {
 
 export type TechnicalPlanType =
   | "measurement"
+  | "redevelopment"
   | "furniture_layout"
   | "flooring"
   | "ceiling"
   | "lighting"
   | "electrical"
+  | "switches"
+  | "sockets"
   | "plumbing"
   | "gas"
   | "hvac";
@@ -556,6 +592,12 @@ export interface TechnicalPlanData {
   ducts?: DuctPath[];
   doorArcs?: { x: number; y: number; radius: number; startAngle: number; endAngle: number }[];
   windowMarkers?: { x1: number; y1: number; x2: number; y2: number }[];
+  /** Redevelopment plan: walls removed vs the original layout (rendered red). */
+  demolishedWalls?: WallSegment[];
+  /** Redevelopment plan: walls added vs the original layout (rendered green). */
+  builtWalls?: WallSegment[];
+  /** Redevelopment plan: true when proposed geometry matches the original within tolerance. */
+  noStructuralChanges?: boolean;
 }
 
 export interface PlumbingFixture {
@@ -643,6 +685,8 @@ export interface UserPreferences {
   /** Optional per-room wishes keyed by detected roomId (e.g. "room_1"). */
   roomWishes?: Record<string, string>;
   totalArea?: number;
+  /** Display/input unit for optional total area; storage remains m² in `totalArea`. */
+  totalAreaUnit?: "m2" | "ft2";
   address?: string;
   /** ISO-ish country code, e.g. AM — aligns with Vista quick-design country picker */
   countryCode?: string;
@@ -691,6 +735,10 @@ export function parseUserPreferences(raw: unknown): UserPreferences {
     wishes: typeof parsed.wishes === "string" ? parsed.wishes : "",
     roomWishes: parseRoomWishes(parsed.roomWishes),
     totalArea: typeof parsed.totalArea === "number" ? parsed.totalArea : undefined,
+    totalAreaUnit:
+      parsed.totalAreaUnit === "m2" || parsed.totalAreaUnit === "ft2"
+        ? parsed.totalAreaUnit
+        : undefined,
     address: typeof parsed.address === "string" ? parsed.address : undefined,
     countryCode,
     searchMode,

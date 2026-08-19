@@ -672,6 +672,26 @@ export function describeOpening(polygon: Point[], edgeIndex: number, t: number):
 }
 
 /**
+ * Re-anchor an opening from one polygon to another after the room's vertices
+ * moved or merged. Converts the anchor `{edgeIndex, t}` to a world point on the
+ * OLD polygon, then snaps that point to the nearest edge of the NEW polygon —
+ * so the opening keeps its true position even when corner-snapping shifted the
+ * wall or changed the edge count. Openings without an `edgeIndex` (text-only or
+ * unanchored) are returned untouched. Used by both the server post-processing
+ * pipeline and the interactive editor's reshape handler so they stay in sync.
+ */
+export function remapOpeningToPolygon<T extends { edgeIndex?: number; t?: number; position: string }>(
+  o: T,
+  oldPoly: Point[],
+  newPoly: Point[],
+): T {
+  if (o.edgeIndex === undefined || oldPoly.length < 2 || newPoly.length < 2) return o;
+  const world = pointAlongEdge(oldPoly, o.edgeIndex, o.t ?? 0.5);
+  const near = nearestEdgeToPoint(newPoly, world);
+  return { ...o, edgeIndex: near.edgeIndex, t: near.t, position: describeOpening(newPoly, near.edgeIndex, near.t) };
+}
+
+/**
  * Derive an `{edgeIndex, t}` anchor for an opening from its free-text position
  * string (e.g. "south wall center", "back wall, near corner", "left wall").
  * Used to make AI detections that arrived without a wall anchor visible and

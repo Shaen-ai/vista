@@ -11,12 +11,15 @@ export type LocalizedPlan = {
 
 const PLAN_KEY_MAP: Record<string, string> = {
   measurement: "technicalPlans.measurement",
+  redevelopment: "technicalPlans.redevelopment",
   furniture: "technicalPlans.furniture",
   furnitureLayout: "technicalPlans.furniture",
   flooring: "technicalPlans.flooring",
   ceiling: "technicalPlans.ceiling",
   lighting: "technicalPlans.lighting",
   electrical: "technicalPlans.electrical",
+  switches: "technicalPlans.switches",
+  sockets: "technicalPlans.sockets",
   plumbing: "technicalPlans.plumbing",
   gas: "technicalPlans.gas",
   hvac: "technicalPlans.hvac",

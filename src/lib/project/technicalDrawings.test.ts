@@ -70,3 +70,33 @@ test("renderPlanToSvg formats dimension labels in metres", () => {
   const svg = renderPlanToSvg(rectPlan(), analysis);
   assert.match(svg, />4\.00 m</);
 });
+
+test("redevelopment plan renders a 'No structural changes' note when nothing differs", () => {
+  const plan: TechnicalPlanData = {
+    planType: "redevelopment",
+    title: "REDEVELOPMENT PLAN",
+    walls: analysis.wallSegments,
+    demolishedWalls: [],
+    builtWalls: [],
+    noStructuralChanges: true,
+  };
+  const svg = renderPlanToSvg(plan, analysis);
+  assert.match(svg, /No structural changes/);
+  assert.match(svg, /Walls to demolish/);
+  assert.match(svg, /Walls to build/);
+});
+
+test("redevelopment plan colors demolished walls red and built walls green", () => {
+  const plan: TechnicalPlanData = {
+    planType: "redevelopment",
+    title: "REDEVELOPMENT PLAN",
+    walls: analysis.wallSegments,
+    demolishedWalls: [{ x1: 2000, y1: 0, x2: 2000, y2: 3000, thickness: 120, lengthMm: 3000 }],
+    builtWalls: [{ x1: 0, y1: 1500, x2: 4000, y2: 1500, thickness: 120, lengthMm: 4000 }],
+    noStructuralChanges: false,
+  };
+  const svg = renderPlanToSvg(plan, analysis);
+  assert.match(svg, /#dc2626/, "demolished walls in red");
+  assert.match(svg, /#16a34a/, "built walls in green");
+  assert.doesNotMatch(svg, /No structural changes/);
+});

@@ -18,8 +18,13 @@ import {
 import { createSseEmitter, isStreamClosedError } from "@/lib/sseStream";
 import { withRequestUploadUser } from "@/lib/uploadUserContext";
 import { FLOOR_PLAN_IMAGE_REQUIRED_CODE } from "@/lib/floorPlanImageError";
+import type { RoboflowFloorPlanDetectResult } from "@/lib/project/roboflowFloorPlanDetect";
 
 export const maxDuration = 900;
+
+// Mirrors the confirm-plan route's room cap — a user-drawn plan with an unbounded
+// room count would later drive one paid render call per room with no server ceiling.
+const MAX_ROOMS = 30;
 
 export async function POST(request: NextRequest) {
   return withRequestUploadUser(request, async () => {
@@ -62,10 +67,29 @@ export async function POST(request: NextRequest) {
     try {
       const parsed = JSON.parse(manualAnalysisRaw);
       if (Array.isArray(parsed?.rooms) && parsed.rooms.length > 0) {
+        if (parsed.rooms.length > MAX_ROOMS) {
+          return new Response(
+            JSON.stringify({ error: `Too many rooms (max ${MAX_ROOMS}) — please simplify the drawn plan.` }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        }
         manualAnalysis = parsed as FloorPlanAnalysis;
       }
     } catch {
       manualAnalysis = undefined;
+    }
+  }
+
+  let clientRoboflow: RoboflowFloorPlanDetectResult | undefined;
+  const roboflowRaw = formData.get("roboflowDetections") as string | null;
+  if (roboflowRaw) {
+    try {
+      const parsed = JSON.parse(roboflowRaw) as RoboflowFloorPlanDetectResult;
+      if (parsed?.image?.width && parsed?.image?.height && Array.isArray(parsed.predictions)) {
+        clientRoboflow = parsed;
+      }
+    } catch {
+      clientRoboflow = undefined;
     }
   }
 
@@ -94,6 +118,7 @@ export async function POST(request: NextRequest) {
             floorPlanMimeType: mimeType,
             preferences,
             manualAnalysis,
+            clientRoboflow,
           },
           (event) => send(event),
         );

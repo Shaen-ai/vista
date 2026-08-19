@@ -5,12 +5,31 @@ const BASE_DELAY_MS = 2000;
  * Retry an async function with exponential backoff on transient AI provider errors
  * (overloaded, rate-limited, 529, 503).
  */
+function isTransportTimeoutError(err: unknown): boolean {
+  if (typeof (err as { message?: string })?.message === "string") {
+    const msg = (err as { message: string }).message;
+    if (/headers timeout|body timeout/i.test(msg)) return true;
+  }
+  const cause = (err as { cause?: { code?: string } })?.cause;
+  if (cause && typeof cause.code === "string") {
+    return /UND_ERR_(HEADERS|BODY)_TIMEOUT/.test(cause.code);
+  }
+  return false;
+}
+
+export type WithRetryOptions = {
+  /** When false, undici/OpenAI transport timeouts are not retried (default true). */
+  retryOnTimeout?: boolean;
+};
+
 export async function withRetry<T>(
   fn: () => Promise<T>,
   label = "AI call",
   maxRetries = MAX_RETRIES,
+  options?: WithRetryOptions,
 ): Promise<T> {
   let lastError: unknown;
+  const retryOnTimeout = options?.retryOnTimeout !== false;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -18,12 +37,15 @@ export async function withRetry<T>(
     } catch (err: any) {
       lastError = err;
 
+      const timeoutRetryable = retryOnTimeout && isTransportTimeoutError(err);
       const isRetryable =
         err?.status === 529 ||
         err?.status === 503 ||
         err?.status === 429 ||
         err?.error?.type === "overloaded_error" ||
+        timeoutRetryable ||
         (typeof err?.message === "string" &&
+          retryOnTimeout &&
           (/overloaded|rate.?limit|too many requests|temporarily unavailable|fetch failed|headers timeout|body timeout/i.test(
             err.message,
           ) ||

@@ -1,10 +1,10 @@
 /**
  * Quick Room shape ↔ creativity slider (0 = keep room shape, 10 = creativity).
  * Always runs nano-banana for products/inspiration; varies shell LoRA + PRESERVE strength.
- * Level 5 is the tuned default sweet spot; lower = tighter lock, higher = freer design.
+ * Level 5 is the tuned sweet spot for preserve strength; UI defaults to 3 for a tighter room lock.
  */
 
-export const DEFAULT_SHAPE_CREATIVITY = 5;
+export const DEFAULT_SHAPE_CREATIVITY = 3;
 
 export type PreserveMode = "veryStrong" | "strong" | "soft";
 export type CreativeMode = "none" | "creative" | "moreCreative";
@@ -44,7 +44,7 @@ export function resolveShapeCreativity(level: number): ShapeCreativityConfig {
   return { level: clamped, ...row };
 }
 
-/** Parse form / query value; missing → default 5. */
+/** Parse form / query value; missing → {@link DEFAULT_SHAPE_CREATIVITY}. */
 export function parseShapeCreativityParam(raw: FormDataEntryValue | string | null | undefined): number {
   if (raw == null || raw === "") return DEFAULT_SHAPE_CREATIVITY;
   return clampShapeCreativity(typeof raw === "string" ? raw.trim() : raw);

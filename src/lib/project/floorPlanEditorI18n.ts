@@ -1,3 +1,6 @@
+import type { LengthUnit } from "@/lib/project/areaUnits";
+import { metresToDisplayLength, SQFT_TO_M2 } from "@/lib/project/areaUnits";
+
 type TranslateFn = (key: string, vars?: Record<string, string | number>) => string;
 
 export function fpT(t: TranslateFn, key: string, vars?: Record<string, string | number>): string {
@@ -52,8 +55,12 @@ export function formatDoorConnectionSubtitle(
   return `${pos} ${fpT(t, "connectsToRoom", { room: roomName ?? connectsTo })}`;
 }
 
-export function formatEdgeLengthLabel(edge: string, t: TranslateFn): string {
-  return fpT(t, "edgeLengthMetres", { edge });
+export function formatEdgeLengthLabel(
+  edge: string,
+  t: TranslateFn,
+  lengthUnit: LengthUnit = "m",
+): string {
+  return fpT(t, lengthUnit === "ft" ? "edgeLengthFeet" : "edgeLengthMetres", { edge });
 }
 
 export function formatFootprint(
@@ -61,6 +68,14 @@ export function formatFootprint(
   depth: number,
   area: number,
   t: TranslateFn,
+  lengthUnit: LengthUnit = "m",
 ): string {
+  if (lengthUnit === "ft") {
+    return fpT(t, "footprintFormatFt", {
+      width: metresToDisplayLength(width, "ft"),
+      depth: metresToDisplayLength(depth, "ft"),
+      area: Math.round(area / SQFT_TO_M2),
+    });
+  }
   return fpT(t, "footprintFormat", { width, depth, area });
 }

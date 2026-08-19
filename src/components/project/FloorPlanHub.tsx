@@ -4,7 +4,9 @@ import { useMemo, useRef } from "react";
 import { useTranslation } from "@/i18n/VistaLocaleProvider";
 import type { FloorPlanAnalysis, RoomResult, UtilityEntryPoint, UtilityPointType, PlanColumn } from "@/lib/project/types";
 import { ROOM_TYPES, type RoomType } from "@/lib/project/types";
+import { analysisHasMultipleFloors, floorLevelShortLabel, roomFloorLevel } from "@/lib/project/floorPlanFloors";
 import { computeBounds, flipY, pointInPolygon, polygonCentroid } from "@/lib/project/floorPlanGeometry";
+import { computeFloorBounds } from "@/lib/project/floorPlanFloorView";
 import { cornerLabel } from "@/lib/roomShapePolygon";
 import { UTILITY_ICONS } from "@/lib/project/utilityIcons";
 import { RoomOpenings } from "./OpeningGlyphs";
@@ -40,6 +42,9 @@ export interface FloorPlanHubProps {
   onMoveColumn?: (id: string, x: number, y: number) => void;
   /** Remove a structural column marker. */
   onRemoveColumn?: (id: string) => void;
+  /** When set, only rooms on this floor are interactive / emphasized. */
+  floorFilter?: 1 | 2 | "all";
+  onFloorFilterChange?: (filter: 1 | 2 | "all") => void;
 }
 
 function roomStatusColor(
@@ -143,6 +148,8 @@ export default function FloorPlanHub({
   onPlaceViewpoint,
   onMoveColumn,
   onRemoveColumn,
+  floorFilter = "all",
+  onFloorFilterChange,
 }: FloorPlanHubProps) {
   const { t } = useTranslation();
   const svgRef = useRef<SVGSVGElement>(null);
@@ -152,13 +159,19 @@ export default function FloorPlanHub({
   // image frame (mm). Use it as the viewBox so the overlay lines up with the
   // image; otherwise fall back to the rooms' bounding box.
   const imageFrame = analysis.imageFrame;
-  const bounds = useMemo(
+  const imageFrameBounds = useMemo(
     () =>
       imageFrame
         ? { minX: 0, minY: 0, maxX: imageFrame.width, maxY: imageFrame.height }
-        : computeBounds(analysis, utilityPointsList),
-    [analysis, utilityPointsList, imageFrame],
+        : null,
+    [imageFrame],
   );
+  const bounds = useMemo(() => {
+    if (floorFilter === 1 || floorFilter === 2) {
+      return computeFloorBounds(analysis, floorFilter, utilityPointsList);
+    }
+    return computeBounds(analysis, utilityPointsList);
+  }, [analysis, utilityPointsList, floorFilter]);
   const viewBox = `${bounds.minX} ${bounds.minY} ${bounds.maxX - bounds.minX} ${bounds.maxY - bounds.minY}`;
   const planWidth = bounds.maxX - bounds.minX;
   // Utility markers must read clearly on the floor-plan image (mm-scale viewBox).
@@ -201,19 +214,47 @@ export default function FloorPlanHub({
 
   const placementActive = Boolean((activePlacementType && onPlaceUtility) || viewpointPlacing);
 
+  const multiFloor = analysisHasMultipleFloors(analysis.rooms);
+  const roomEmphasis = (room: (typeof analysis.rooms)[number]) => {
+    if (floorFilter === "all") return 1;
+    return roomFloorLevel(room) === floorFilter ? 1 : 0.12;
+  };
+
   return (
     <div className="flex flex-col gap-3 w-full">
+      {multiFloor && mode === "review" && onFloorFilterChange && (
+        <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
+          {(["all", 1, 2] as const).map((key) => (
+            <button
+              key={String(key)}
+              type="button"
+              onClick={() => onFloorFilterChange(key)}
+              className={`px-2.5 py-1 rounded-full border font-medium cursor-pointer transition-colors ${
+                floorFilter === key
+                  ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                  : "border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]/40"
+              }`}
+            >
+              {key === "all" ? "All floors" : floorLevelShortLabel(key)}
+            </button>
+          ))}
+        </div>
+      )}
       <div
         className={`relative w-full rounded-2xl overflow-hidden border border-[var(--border)] bg-[var(--muted)] ${
-          imageFrame ? "" : "aspect-[4/3]"
+          imageFrameBounds ? "" : "aspect-[4/3]"
         }`}
-        style={imageFrame ? { aspectRatio: `${imageFrame.width} / ${imageFrame.height}` } : undefined}
+        style={{
+          aspectRatio: `${bounds.maxX - bounds.minX} / ${bounds.maxY - bounds.minY}`,
+        }}
       >
-        <img
-          src={floorPlanImageSrc}
-          alt="Floor plan"
-          className="absolute inset-0 w-full h-full object-contain opacity-90 pointer-events-none"
-        />
+        {!imageFrameBounds && (
+          <img
+            src={floorPlanImageSrc}
+            alt="Floor plan"
+            className="absolute inset-0 w-full h-full object-contain opacity-90 pointer-events-none"
+          />
+        )}
         <svg
           ref={svgRef}
           viewBox={viewBox}
@@ -221,6 +262,18 @@ export default function FloorPlanHub({
           preserveAspectRatio="xMidYMid meet"
           onClick={placementActive ? handleSvgClick : undefined}
         >
+          {imageFrameBounds && (
+            <image
+              href={floorPlanImageSrc}
+              x={imageFrameBounds.minX}
+              y={flipY(imageFrameBounds.maxY, bounds)}
+              width={imageFrameBounds.maxX - imageFrameBounds.minX}
+              height={imageFrameBounds.maxY - imageFrameBounds.minY}
+              preserveAspectRatio="xMidYMid meet"
+              opacity={0.9}
+              style={{ pointerEvents: "none" }}
+            />
+          )}
           {analysis.wallSegments.map((w, i) => (
             <line
               key={`wall-${i}`}
@@ -245,9 +298,11 @@ export default function FloorPlanHub({
             const labelY = flipY(cy, bounds);
             const colors = roomStatusColor(room.id, rooms, selectedRoomId);
             const isSuggested = suggestedNextRoomId === room.id && mode === "design";
+            const emphasis = roomEmphasis(room);
+            const dimmed = emphasis < 0.5;
 
             return (
-              <g key={room.id}>
+              <g key={room.id} opacity={emphasis} style={{ pointerEvents: dimmed ? "none" : undefined }}>
                 <polygon
                   points={flipped}
                   fill={colors.fill}
@@ -255,12 +310,12 @@ export default function FloorPlanHub({
                   strokeWidth={isSuggested ? 120 : 60}
                   strokeDasharray={isSuggested ? "200 100" : undefined}
                   className={
-                    placementActive
+                    placementActive || dimmed
                       ? "pointer-events-none"
                       : "cursor-pointer transition-all hover:opacity-90"
                   }
                   onClick={
-                    placementActive
+                    placementActive || dimmed
                       ? undefined
                       : (e) => {
                           e.stopPropagation();
@@ -279,6 +334,7 @@ export default function FloorPlanHub({
                   style={{ pointerEvents: "none", textShadow: "0 0 4px rgba(0,0,0,0.8)" }}
                 >
                   {room.name}
+                  {multiFloor ? ` · F${roomFloorLevel(room)}` : ""}
                 </text>
                 {/* Corner letters (A, B, C…) on the active room so the user can map
                     each editable wall (A-B, B-C…) to a corner on the plan. */}
@@ -314,9 +370,11 @@ export default function FloorPlanHub({
             );
           })}
 
-          {analysis.rooms.map((room) => (
-            <RoomOpenings key={`op-${room.id}`} room={room} bounds={bounds} planWidth={planWidth} />
-          ))}
+          {analysis.rooms.map((room) =>
+            roomEmphasis(room) < 0.5 ? null : (
+              <RoomOpenings key={`op-${room.id}`} room={room} bounds={bounds} planWidth={planWidth} />
+            ),
+          )}
 
           {utilityPointsList.map((point) => {
             const style = utilityMarkerStyle(point.type);

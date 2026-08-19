@@ -12,6 +12,11 @@ import { authContextForApi } from "@/lib/vistaTokens";
 import { TokenInsufficientError } from "@/lib/tokenErrors";
 
 const DEFAULT_GENERATE_ROOM_SSE_TIMEOUT_MS = 360_000;
+// Floor-plan analyze uses exactly one OpenAI vision call (see floorPlanAnalyzer.ts);
+// generous but bounded so a hung request fails with a clear message instead of
+// waiting on the client forever.
+const DEFAULT_CREATE_PROJECT_SSE_TIMEOUT_MS = 480_000;
+const CREATE_PROJECT_SSE_TIMEOUT_SEC = DEFAULT_CREATE_PROJECT_SSE_TIMEOUT_MS / 1000;
 
 let activeRoomGenerationAbort: AbortController | null = null;
 
@@ -44,24 +49,49 @@ export function useProjectSSE() {
     formData: FormData,
     onProgress: (event: ProgressEvent) => void,
   ): Promise<ProgressEvent> => {
-    const res = await fetch("/api/project/create-stream", {
-      method: "POST",
-      body: formData,
-    });
+    const controller = new AbortController();
+    // Covers the WHOLE operation, not just the initial connection: the SSE route
+    // returns its Response (and this fetch() resolves) almost immediately, before
+    // any analysis happens — the actual OpenAI work streams in afterward via
+    // consumeSSE's body read. Aborting this controller still cancels that ongoing
+    // read (same signal, same fetch), which is what actually bounds a hang like the
+    // one that produced the ~19 min stall. Only clear it once the whole thing settles.
+    const timeoutId = setTimeout(() => controller.abort(), DEFAULT_CREATE_PROJECT_SSE_TIMEOUT_MS);
 
-    if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
-      const json = await res.json();
-      throwIfAiServiceUnavailable(json);
-      throw new Error(sanitizeUserFacingMessage(json.error || "Project creation failed"));
-    }
+    try {
+      const res = await fetch("/api/project/create-stream", {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
 
-    const last = await consumeSSE(res, onProgress);
-    if (!last?.data) {
-      throw new Error("Project creation did not complete");
+      if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
+        const json = await res.json();
+        throwIfAiServiceUnavailable(json);
+        throw new Error(sanitizeUserFacingMessage(json.error || "Project creation failed"));
+      }
+
+      const last = await consumeSSE(res, onProgress);
+      if (!last?.data) {
+        throw new Error("Project creation did not complete");
+      }
+      track("project_created");
+      dispatchSpendUpdate();
+      return last;
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        pipelineLog(
+          "ANALYZE_FLOOR_PLAN",
+          `floor plan analysis client-side timed out after ${CREATE_PROJECT_SSE_TIMEOUT_SEC}s`,
+          { timeoutMs: DEFAULT_CREATE_PROJECT_SSE_TIMEOUT_MS },
+          "error",
+        );
+        throw new Error("Analysis timed out — please try again.");
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    track("project_created");
-    dispatchSpendUpdate();
-    return last;
   };
 
   const generateRoomImpl = async (
